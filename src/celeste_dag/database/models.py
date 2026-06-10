@@ -67,6 +67,8 @@ class TaskEventType(str, enum.Enum):
     NODE_COMPLETED = "node_completed"
     NODE_FAILED = "node_failed"
     COMPENSATION_TRIGGERED = "compensation_triggered"
+    COMPENSATION_COMPLETED = "compensation_completed"
+    COMPENSATION_FAILED = "compensation_failed"
     STATE_CHECKPOINT = "state_checkpoint"
 
 

@@ -791,11 +791,13 @@ class TestTaskEventTypeEnum:
             "node_completed",
             "node_failed",
             "compensation_triggered",
+            "compensation_completed",
+            "compensation_failed",
             "state_checkpoint",
         }
         actual = {e.value for e in TaskEventType}
         assert actual == expected
-        assert len(TaskEventType) == 5
+        assert len(TaskEventType) == 7
 
     def test_event_type_values(self, session, sample_workflow):
         node = TaskNode(
