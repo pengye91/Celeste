@@ -58,6 +58,7 @@ class WorkflowStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class TaskEventType(str, enum.Enum):
