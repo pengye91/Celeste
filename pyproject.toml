@@ -31,7 +31,6 @@ dependencies = [
     "pydantic-settings",
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite",
-    "asyncpg",
     "anthropic",
     "openai",
     "google-generativeai",
@@ -43,10 +42,17 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
 ]
+pg = [
+    "asyncpg",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/celeste_dag"]
 
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
