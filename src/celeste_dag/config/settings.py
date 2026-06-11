@@ -40,6 +40,46 @@ class EngineSettings(BaseSettings):
         if v < 1 or v > 64:
             raise ValueError("MAX_PARALLEL_SUBPROCESSES must be between 1 and 64")
         return v
+
+    # --- Environment Agent Protocol ---
+    SNAPSHOT_TIMEOUT_MS: int = 5000
+    SNAPSHOT_FULL_INTERVAL_CALLS: int = 10
+    SNAPSHOT_FULL_INTERVAL_SECONDS: int = 300
+    PLANNER_TIMEOUT_MS: int = 60000
+    PLANNER_MAX_RETRIES: int = 2
+    MAX_OPA_CYCLES: int = 100
+    MAX_LLM_TOKENS: int = 50000
+    EVALUATOR_CACHE_ENABLED: bool = True
+    EVALUATOR_CACHE_TTL_SECONDS: int = 3600
+
+    @field_validator("SNAPSHOT_TIMEOUT_MS", "PLANNER_TIMEOUT_MS")
+    @classmethod
+    def _validate_timeout_ms(cls, v: int) -> int:
+        if v < 100:
+            raise ValueError("timeout values must be >= 100")
+        return v
+
+    @field_validator("MAX_OPA_CYCLES")
+    @classmethod
+    def _validate_max_opa_cycles(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("MAX_OPA_CYCLES must be >= 1")
+        return v
+
+    @field_validator("MAX_LLM_TOKENS")
+    @classmethod
+    def _validate_max_llm_tokens(cls, v: int) -> int:
+        if v < 1000:
+            raise ValueError("MAX_LLM_TOKENS must be >= 1000")
+        return v
+
+    @field_validator("PLANNER_MAX_RETRIES")
+    @classmethod
+    def _validate_planner_max_retries(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("PLANNER_MAX_RETRIES must be >= 0")
+        return v
+
     STRICT_SECURITY_MODE: bool = True
 
     # --- Workspace isolation ---

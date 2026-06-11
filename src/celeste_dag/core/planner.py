@@ -14,11 +14,13 @@ Public API:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from celeste_dag.core.exceptions import PlannerTimeoutError
 from celeste_dag.core.llm.base import BaseLLMClient, LLMMessage
 from celeste_dag.toolkits.base import BaseToolkit
 
@@ -40,6 +42,13 @@ class DAGNode(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
     compensation_command: str | None = None
     compensation_arguments: dict[str, Any] | None = None
+    task_id: str | None = None
+    preconditions: list[str] | None = None
+    postconditions: list[str] | None = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.task_id is None:
+            self.task_id = self.name
 
 
 class DAGPlan(BaseModel):
@@ -49,6 +58,15 @@ class DAGPlan(BaseModel):
     description: str = ""
     nodes: list[DAGNode] = Field(default_factory=list)
     variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class DAGFragment(BaseModel):
+    """A batch of tasks for one planning cycle (OPA Loop)."""
+
+    nodes: list[DAGNode] = Field(default_factory=list)
+    reasoning: str
+    estimated_remaining: int | None = None
+    goal_achieved: bool = False
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -91,6 +109,51 @@ Rules:
 5. Order nodes so dependencies come before dependents.
 """
 
+_OPA_SYSTEM_PROMPT_TEMPLATE = """\
+You are an expert workflow planner operating in an Observe-Plan-Act (OPA) loop.
+Your job is to plan the next batch of tasks given the current goal, environment \
+observation, available tools, and execution history.
+
+Each node in the DAG represents a discrete step:
+- **llm_call**: Invoke an LLM with a prompt.
+- **tool_execution**: Run a registered tool.
+- **fan_out**: Dynamically spawn parallel sub-tasks from an array output.
+- **map_reduce**: Apply a transformation to each element and merge results.
+- **condition**: Branch based on a predicate.
+
+Available tools:
+{tools_section}
+
+Output a valid JSON object matching the DAGFragment schema:
+{{
+  "nodes": [
+    {{
+      "name": "<unique_node_name>",
+      "task_type": "<one of: llm_call, tool_execution, fan_out, map_reduce, condition>",
+      "command": "<command or tool name>",
+      "arguments": {{}},
+      "dependencies": ["<names of upstream nodes>"],
+      "compensation_command": "<optional rollback command>",
+      "compensation_arguments": {{}},
+      "task_id": "<optional explicit task id>",
+      "preconditions": ["<conditions that must hold before execution>"],
+      "postconditions": ["<conditions that will hold after execution>"]
+    }}
+  ],
+  "reasoning": "<explanation of why these nodes were chosen>",
+  "estimated_remaining": <int or null>,
+  "goal_achieved": <bool>
+}}
+
+Rules:
+1. Node names must be unique within a fragment.
+2. Dependencies must reference existing node names or nodes from history.
+3. State-mutating operations MUST have compensation_command.
+4. Read-only operations do NOT need compensation.
+5. Set goal_achieved=true only when the user's goal is fully satisfied.
+6. estimated_remaining is your best guess of how many more planning cycles are needed.
+"""
+
 
 class Planner:
     """Cognitive Right Brain: Compiles user requests into DAG execution plans."""
@@ -107,10 +170,69 @@ class Planner:
 
     async def plan(
         self,
+        goal: str,
+        observation: dict | None = None,
+        tool_schemas: list[dict] | None = None,
+        history: list[dict] | None = None,
+        timeout_ms: int = 60000,
+    ) -> DAGFragment:
+        """Plan the next batch of tasks in an OPA loop.
+
+        Uses the LLM to:
+        1. Observe the current environment state
+        2. Plan the next executable DAG fragment
+        3. Include reasoning and progress estimation
+
+        Args:
+            goal: The user's high-level goal.
+            observation: Environment snapshot data.
+            tool_schemas: Available tool schemas for this cycle.
+            history: Execution history from previous cycles.
+            timeout_ms: Maximum time to wait for the LLM response.
+
+        Returns:
+            A DAGFragment containing the next batch of nodes.
+
+        Raises:
+            PlannerTimeoutError: If the LLM call exceeds ``timeout_ms``.
+        """
+        tools_section = self._build_tools_section()
+        system_prompt = _OPA_SYSTEM_PROMPT_TEMPLATE.format(tools_section=tools_section)
+
+        messages: list[LLMMessage] = [LLMMessage(role="system", content=system_prompt)]
+
+        parts: list[str] = [f"Goal:\n{goal}"]
+        if observation:
+            parts.append(f"Observation:\n{json.dumps(observation, default=str)}")
+        if tool_schemas:
+            parts.append(f"Available Tools:\n{json.dumps(tool_schemas, default=str)}")
+        if history:
+            parts.append(f"History:\n{json.dumps(history, default=str)}")
+
+        messages.append(LLMMessage(role="user", content="\n\n".join(parts)))
+
+        try:
+            return await asyncio.wait_for(
+                self._client.structured_output(
+                    messages,
+                    DAGFragment,
+                    temperature=0.0,
+                ),
+                timeout=timeout_ms / 1000.0,
+            )
+        except asyncio.TimeoutError as exc:
+            raise PlannerTimeoutError(
+                f"Planner LLM call exceeded timeout of {timeout_ms}ms"
+            ) from exc
+
+    async def plan_full_dag(
+        self,
         user_request: str,
         context: dict | None = None,
     ) -> DAGPlan:
-        """Compile a user request into an executable DAG plan.
+        """Compile a user request into a complete executable DAG plan.
+
+        Backward-compatible method that generates the entire DAG in one call.
 
         Uses the LLM to:
         1. Understand the user's intent

@@ -1,5 +1,6 @@
 """
-Tests for the DAG planner with fan-out and Saga patterns (Tasks 4.1-4.3).
+Tests for the DAG planner with fan-out and Saga patterns (Tasks 4.1-4.3)
+and OPA Loop planner updates.
 
 Follows strict TDD: these tests are written BEFORE the implementation.
 Covers:
@@ -14,6 +15,7 @@ Covers:
 - SagaPlan.get_compensations() returns reversed completed steps
 - extract_saga_plan() extracts from DAGPlan
 - Edge cases: empty plans, single node, large fan-out
+- OPA Loop: DAGFragment, new plan() signature, timeout handling
 """
 
 from __future__ import annotations
@@ -128,6 +130,9 @@ class _StubToolkit(BaseToolkit):
                 return t
         return None
 
+    async def execute(self, name: str, arguments: dict, driver: Any | None) -> dict:
+        return {"success": True}
+
 
 # ===========================================================================
 # DAGNode
@@ -223,6 +228,38 @@ class TestDAGNode:
         assert d["name"] == "n"
         json_str = json.dumps(d)  # must be JSON-serialisable
         assert "n" in json_str
+
+    def test_dag_node_merged_model(self):
+        """DAGNode has optional task_id, preconditions, postconditions fields."""
+        from celeste_dag.core.planner import DAGNode
+
+        node = DAGNode(
+            name="step_1",
+            task_type="llm_call",
+            command="summarize",
+            task_id="custom_id",
+            preconditions=["data_ready"],
+            postconditions=["summary_done"],
+        )
+        assert node.name == "step_1"
+        assert node.task_id == "custom_id"
+        assert node.preconditions == ["data_ready"]
+        assert node.postconditions == ["summary_done"]
+
+    def test_dag_node_task_id_defaults_to_name(self):
+        """When task_id is not provided, it defaults to name."""
+        from celeste_dag.core.planner import DAGNode
+
+        node = DAGNode(name="step_1", task_type="llm_call", command="summarize")
+        assert node.task_id == "step_1"
+
+    def test_dag_node_preconditions_postconditions_default_none(self):
+        """When preconditions/postconditions are not provided, they default to None."""
+        from celeste_dag.core.planner import DAGNode
+
+        node = DAGNode(name="step_1", task_type="llm_call", command="summarize")
+        assert node.preconditions is None
+        assert node.postconditions is None
 
 
 # ===========================================================================
@@ -394,7 +431,7 @@ class TestPlanner:
 
     @pytest.mark.asyncio()
     async def test_plan_calls_structured_output(self):
-        """Planner.plan() must call the LLM's structured_output with DAGPlan model."""
+        """Planner.plan_full_dag() must call the LLM's structured_output with DAGPlan model."""
         from celeste_dag.core.planner import DAGNode, DAGPlan, Planner
 
         client = _StubLLMClient()
@@ -406,7 +443,7 @@ class TestPlanner:
         client._structured_side_effect = expected_plan
 
         planner = Planner(client)
-        result = await planner.plan("Analyze sales data")
+        result = await planner.plan_full_dag("Analyze sales data")
 
         assert len(client.structured_output_calls) == 1
         call = client.structured_output_calls[0]
@@ -429,7 +466,7 @@ class TestPlanner:
         client._structured_side_effect = expected
 
         planner = Planner(client)
-        result = await planner.plan("Do something")
+        result = await planner.plan_full_dag("Do something")
         assert isinstance(result, DAGPlan)
         assert result.name == "plan"
 
@@ -440,7 +477,7 @@ class TestPlanner:
 
         client = _StubLLMClient()
         planner = Planner(client)
-        await planner.plan("Analyze data", context={"project": "acme"})
+        await planner.plan_full_dag("Analyze data", context={"project": "acme"})
 
         call = client.structured_output_calls[0]
         messages = call["messages"]
@@ -455,7 +492,7 @@ class TestPlanner:
 
         client = _StubLLMClient()
         planner = Planner(client, toolkits=[_StubToolkit()])
-        await planner.plan("Use tools")
+        await planner.plan_full_dag("Use tools")
 
         call = client.structured_output_calls[0]
         system_msg = call["messages"][0]
@@ -469,10 +506,220 @@ class TestPlanner:
 
         client = _StubLLMClient()
         planner = Planner(client)
-        await planner.plan("Test")
+        await planner.plan_full_dag("Test")
 
         call = client.structured_output_calls[0]
         assert call["temperature"] == 0.0
+
+    @pytest.mark.asyncio()
+    async def test_plan_full_dag_backward_compatible(self):
+        """plan_full_dag() should still work with the old signature."""
+        from celeste_dag.core.planner import DAGNode, DAGPlan, Planner
+
+        client = _StubLLMClient()
+        expected_plan = DAGPlan(
+            name="test_plan",
+            description="A plan",
+            nodes=[DAGNode(name="s1", task_type="llm_call", command="analyze")],
+        )
+        client._structured_side_effect = expected_plan
+
+        planner = Planner(client)
+        result = await planner.plan_full_dag("Analyze sales data")
+
+        assert isinstance(result, DAGPlan)
+        assert result.name == "test_plan"
+        assert len(client.structured_output_calls) == 1
+        call = client.structured_output_calls[0]
+        assert call["response_model"] is DAGPlan
+
+
+# ===========================================================================
+# OPA Loop Planner (new plan() signature)
+# ===========================================================================
+
+
+class _StubLLMClientFragment(BaseLLMClient):
+    """LLM client that returns DAGFragment for OPA loop tests."""
+
+    def __init__(self) -> None:
+        self.complete_calls: list[dict[str, Any]] = []
+        self.structured_output_calls: list[dict[str, Any]] = []
+        self._structured_side_effect: Any = None
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        self.complete_calls.append(
+            {
+                "messages": messages,
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "tools": tools,
+            }
+        )
+        return LLMResponse(
+            content='{"nodes": [], "reasoning": "test"}',
+            model="stub",
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        )
+
+    async def structured_output(
+        self,
+        messages: list[LLMMessage],
+        response_model: type,
+        *,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+    ) -> Any:
+        self.structured_output_calls.append(
+            {
+                "messages": messages,
+                "response_model": response_model,
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+        )
+        if self._structured_side_effect is not None:
+            return self._structured_side_effect
+        from celeste_dag.core.planner import DAGFragment
+
+        return DAGFragment.model_construct(nodes=[], reasoning="test")
+
+    async def close(self) -> None:
+        pass
+
+
+class TestPlannerOPALoop:
+    """Tests for the new OPA Loop Planner.plan() interface."""
+
+    @pytest.mark.asyncio()
+    async def test_planner_accepts_observation_context(self):
+        """plan() accepts goal, observation, tool_schemas, and history."""
+        from celeste_dag.core.planner import DAGFragment, Planner
+
+        client = _StubLLMClientFragment()
+        planner = Planner(client)
+
+        observation = {"cwd": "/tmp", "files": ["a.txt"]}
+        tool_schemas = [{"name": "read_file", "description": "Read a file"}]
+        history = [{"action": "previous_step", "result": "ok"}]
+
+        result = await planner.plan(
+            goal="Read a file",
+            observation=observation,
+            tool_schemas=tool_schemas,
+            history=history,
+        )
+
+        assert isinstance(result, DAGFragment)
+        assert len(client.structured_output_calls) == 1
+        call = client.structured_output_calls[0]
+        messages = call["messages"]
+        all_content = " ".join(m.content for m in messages)
+        assert "Read a file" in all_content
+        assert "/tmp" in all_content or "a.txt" in all_content
+        assert "read_file" in all_content
+        assert "previous_step" in all_content
+
+    @pytest.mark.asyncio()
+    async def test_planner_returns_dag_fragment(self):
+        """plan() returns a DAGFragment with nodes, reasoning, etc."""
+        from celeste_dag.core.planner import DAGFragment, DAGNode, Planner
+
+        client = _StubLLMClientFragment()
+        expected = DAGFragment(
+            nodes=[
+                DAGNode(
+                    name="step_1",
+                    task_type="tool_execution",
+                    command="read_file",
+                    arguments={"path": "/tmp/a.txt"},
+                )
+            ],
+            reasoning="Need to read the file first.",
+            estimated_remaining=2,
+            goal_achieved=False,
+        )
+        client._structured_side_effect = expected
+
+        planner = Planner(client)
+        result = await planner.plan(goal="Read a file")
+
+        assert isinstance(result, DAGFragment)
+        assert result.reasoning == "Need to read the file first."
+        assert result.estimated_remaining == 2
+        assert result.goal_achieved is False
+        assert len(result.nodes) == 1
+        assert result.nodes[0].name == "step_1"
+
+    @pytest.mark.asyncio()
+    async def test_planner_timeout_raises_planner_timeout_error(self):
+        """plan() wraps LLM call in asyncio.wait_for and raises PlannerTimeoutError."""
+        import asyncio
+
+        from celeste_dag.core.exceptions import PlannerTimeoutError
+        from celeste_dag.core.planner import Planner
+
+        class _SlowLLMClient(BaseLLMClient):
+            async def complete(self, messages, **kwargs):
+                await asyncio.sleep(10)
+                return LLMResponse(
+                    content="{}",
+                    model="slow",
+                    usage={},
+                )
+
+            async def close(self):
+                pass
+
+        client = _SlowLLMClient()
+        planner = Planner(client)
+
+        with pytest.raises(PlannerTimeoutError):
+            await planner.plan(goal="Do something", timeout_ms=50)
+
+    @pytest.mark.asyncio()
+    async def test_planner_timeout_ms_default(self):
+        """plan() should work with default timeout_ms."""
+        from celeste_dag.core.planner import DAGFragment, Planner
+
+        client = _StubLLMClientFragment()
+        planner = Planner(client)
+        result = await planner.plan(goal="Test")
+        assert isinstance(result, DAGFragment)
+
+    def test_dag_fragment_model(self):
+        """DAGFragment model has the expected fields and defaults."""
+        from celeste_dag.core.planner import DAGFragment, DAGNode
+
+        fragment = DAGFragment(
+            nodes=[DAGNode(name="n", task_type="llm_call", command="c")],
+            reasoning="test reasoning",
+            estimated_remaining=3,
+            goal_achieved=True,
+        )
+        assert len(fragment.nodes) == 1
+        assert fragment.reasoning == "test reasoning"
+        assert fragment.estimated_remaining == 3
+        assert fragment.goal_achieved is True
+
+    def test_dag_fragment_defaults(self):
+        """DAGFragment defaults for optional fields."""
+        from celeste_dag.core.planner import DAGFragment
+
+        fragment = DAGFragment(nodes=[], reasoning="done")
+        assert fragment.estimated_remaining is None
+        assert fragment.goal_achieved is False
 
 
 # ===========================================================================

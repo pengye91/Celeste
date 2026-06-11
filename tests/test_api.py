@@ -39,6 +39,7 @@ from celeste_dag.database.models import (
     Workflow,
     WorkflowStatus,
 )
+from celeste_dag.core.agent.agent import EnvironmentAgent
 
 
 # ---------------------------------------------------------------------------
@@ -839,4 +840,111 @@ class TestErrorHandling:
     async def test_malformed_uuid_handled(self, client):
         """Invalid UUID format returns 404 (not 500)."""
         resp = await client.get("/api/workflows/abc-not-uuid")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Test: Agent management endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestAgentManagement:
+    """Tests for POST /agents/register, GET /agents/{id}/status,
+    GET /agents, and DELETE /agents/{id}."""
+
+    @pytest.mark.asyncio
+    async def test_register_agent_creates_record(self, client):
+        """POST /agents/register creates an agent record."""
+        resp = await client.post(
+            "/agents/register",
+            json={"url": "ws://localhost:9001"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "agent_id" in data
+        assert data["status"] == "pending"
+        # Should be a valid UUID
+        parsed = uuid.UUID(data["agent_id"])
+        assert str(parsed) == data["agent_id"]
+
+    @pytest.mark.asyncio
+    async def test_register_agent_with_auth_token(self, client):
+        """POST /agents/register accepts an optional auth_token."""
+        resp = await client.post(
+            "/agents/register",
+            json={
+                "url": "ws://localhost:9001",
+                "auth_token": "secret123",
+                "metadata": {"env": "prod"},
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "agent_id" in data
+        assert data["status"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_get_agent_status(self, client):
+        """GET /agents/{id}/status returns agent status."""
+        # Register an agent first
+        reg_resp = await client.post(
+            "/agents/register",
+            json={"url": "ws://localhost:9001"},
+        )
+        agent_id = reg_resp.json()["agent_id"]
+
+        resp = await client.get(f"/agents/{agent_id}/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["agent_id"] == agent_id
+        assert data["status"] in ("connected", "disconnected", "error")
+        assert "last_seen" in data
+
+    @pytest.mark.asyncio
+    async def test_list_agents(self, client):
+        """GET /agents returns all registered agents."""
+        # Register two agents
+        resp1 = await client.post(
+            "/agents/register",
+            json={"url": "ws://localhost:9001", "metadata": {"name": "agent1"}},
+        )
+        resp2 = await client.post(
+            "/agents/register",
+            json={"url": "ws://localhost:9002", "metadata": {"name": "agent2"}},
+        )
+        id1 = resp1.json()["agent_id"]
+        id2 = resp2.json()["agent_id"]
+
+        resp = await client.get("/agents")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        agent_ids = {a["agent_id"] for a in data}
+        assert agent_ids == {id1, id2}
+
+    @pytest.mark.asyncio
+    async def test_delete_agent(self, client):
+        """DELETE /agents/{id} unregisters an agent."""
+        # Register an agent
+        reg_resp = await client.post(
+            "/agents/register",
+            json={"url": "ws://localhost:9001"},
+        )
+        agent_id = reg_resp.json()["agent_id"]
+
+        # Delete it
+        del_resp = await client.delete(f"/agents/{agent_id}")
+        assert del_resp.status_code == 200
+        assert del_resp.json()["success"] is True
+
+        # Should no longer exist
+        status_resp = await client.get(f"/agents/{agent_id}/status")
+        assert status_resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_agent_returns_404(self, client):
+        """GET /agents/{id}/status for unknown agent returns 404."""
+        fake_id = str(uuid.uuid4())
+        resp = await client.get(f"/agents/{fake_id}/status")
         assert resp.status_code == 404

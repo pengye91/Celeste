@@ -72,6 +72,16 @@ class TaskEventType(str, enum.Enum):
     COMPENSATION_FAILED = "compensation_failed"
     STATE_CHECKPOINT = "state_checkpoint"
 
+    # OPA loop event types
+    WORKFLOW_SUBMITTED = "workflow_submitted"
+    WORKFLOW_COMPLETED = "workflow_completed"
+    OBSERVATION_CAPTURED = "observation_captured"
+    PLAN_GENERATED = "plan_generated"
+    EVALUATION_RESULT = "evaluation_result"
+    PRECONDITION_CHECKED = "precondition_checked"
+    CYCLE_STARTED = "cycle_started"
+    CHECKPOINT = "checkpoint"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -129,6 +139,10 @@ class Workflow(Base):
         cascade="all, delete-orphan",
     )
     task_events: Mapped[list["TaskEvent"]] = relationship(
+        back_populates="workflow",
+        cascade="all, delete-orphan",
+    )
+    workflow_events: Mapped[list["WorkflowEvent"]] = relationship(
         back_populates="workflow",
         cascade="all, delete-orphan",
     )
@@ -254,6 +268,11 @@ class TaskEvent(Base):
         JSON,
         nullable=True,
     )
+    sequence_number: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+    )
     timestamp: Mapped[datetime] = mapped_column(
         nullable=False,
         default=_utcnow,
@@ -267,4 +286,60 @@ class TaskEvent(Base):
         return (
             f"<TaskEvent id={self.id} type={self.event_type.value!r} "
             f"node={self.task_node_id}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# WorkflowEvent
+# ---------------------------------------------------------------------------
+
+
+class WorkflowEvent(Base):
+    """Workflow-level event for OPA loop tracking.
+
+    Records high-level workflow lifecycle events (submission, observation,
+    planning, evaluation, checkpointing) to support the OPA loop audit trail.
+    """
+
+    __tablename__ = "workflow_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workflows.id"),
+        nullable=False,
+        index=True,
+    )
+    task_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("task_nodes.id"),
+        nullable=True,
+        index=True,
+    )
+    event_type: Mapped[TaskEventType] = mapped_column(
+        Enum(TaskEventType, name="task_event_type", native_enum=False),
+        nullable=False,
+        index=True,
+    )
+    event_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    sequence_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        nullable=False,
+        default=_utcnow,
+    )
+
+    # Relationships
+    workflow: Mapped["Workflow"] = relationship(back_populates="workflow_events")
+
+    def __repr__(self) -> str:
+        return (
+            f"<WorkflowEvent id={self.id} type={self.event_type.value!r} "
+            f"workflow={self.workflow_id} seq={self.sequence_number}>"
         )

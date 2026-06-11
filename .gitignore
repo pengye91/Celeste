@@ -40,3 +40,4 @@ htmlcov/
 
 # Project-specific
 celeste.db
+.claude/

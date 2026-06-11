@@ -7,6 +7,11 @@ parsing/serialising structured data formats (CSV, JSON).
 
 from __future__ import annotations
 
+import json
+import os
+import platform
+from typing import Any
+
 from celeste_dag.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
 
 
@@ -130,6 +135,76 @@ class SystemDataToolkit(BaseToolkit):
             ],
             returns="Parsed JSON data as an object.",
         ),
+        ToolDefinition(
+            name="snapshot",
+            description="Walk directories and return a consolidated environment snapshot.",
+            parameters=[
+                ToolParameter(
+                    name="paths",
+                    type="array",
+                    description="List of directory paths to include in the snapshot.",
+                    required=False,
+                ),
+            ],
+            returns="Dict with files map and platform info.",
+        ),
+        ToolDefinition(
+            name="run_command",
+            description="Execute a shell command with optional arguments, cwd, and timeout.",
+            parameters=[
+                ToolParameter(
+                    name="command",
+                    type="string",
+                    description="The command to execute.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="args",
+                    type="array",
+                    description="List of arguments to pass to the command.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="cwd",
+                    type="string",
+                    description="Working directory for the command.",
+                    required=False,
+                ),
+                ToolParameter(
+                    name="timeout",
+                    type="integer",
+                    description="Timeout in seconds.",
+                    required=False,
+                ),
+            ],
+            returns="Dict with exit_code, stdout, and stderr.",
+        ),
+        ToolDefinition(
+            name="check_command",
+            description="Check whether a command is available in the environment.",
+            parameters=[
+                ToolParameter(
+                    name="command",
+                    type="string",
+                    description="The command to check for.",
+                    required=True,
+                ),
+            ],
+            returns="Dict with available boolean.",
+        ),
+        ToolDefinition(
+            name="stat",
+            description="Return file or directory metadata.",
+            parameters=[
+                ToolParameter(
+                    name="path",
+                    type="string",
+                    description="Path to the file or directory.",
+                    required=True,
+                ),
+            ],
+            returns="Dict with size, modified_time, and permissions.",
+        ),
     ]
 
     # ------------------------------------------------------------------
@@ -144,3 +219,93 @@ class SystemDataToolkit(BaseToolkit):
             if tool.name == name:
                 return tool
         return None
+
+    async def execute(
+        self, name: str, arguments: dict[str, Any], driver: Any | None
+    ) -> dict[str, Any]:
+        """Execute a system-data tool via the provided driver."""
+        if driver is None:
+            return {"error": "driver_required", "message": "SystemDataToolkit requires a driver"}
+
+        if name == "read_file":
+            path = arguments.get("path", "")
+            return await driver.read_file(path)
+
+        if name == "list_directory":
+            path = arguments.get("path", "")
+            return await driver.list_directory(path)
+
+        if name == "snapshot":
+            paths = arguments.get("paths", ["."])
+            files: dict[str, Any] = {}
+            for p in paths:
+                try:
+                    result = await driver.list_directory(p)
+                    files[p] = result.get("files", [])
+                except Exception:
+                    files[p] = []
+            return {"files": files, "platform": platform.system().lower()}
+
+        if name == "run_command":
+            command = arguments.get("command", "")
+            args = arguments.get("args", []) or []
+            cwd = arguments.get("cwd")
+            timeout = arguments.get("timeout")
+            return await driver.run_command(command, args=args, cwd=cwd, timeout=timeout)
+
+        if name == "check_command":
+            command = arguments.get("command", "")
+            try:
+                result = await driver.run_command("which", args=[command])
+                available = result.get("exit_code", -1) == 0
+            except Exception:
+                available = False
+            return {"available": available}
+
+        if name == "stat":
+            path = arguments.get("path", "")
+            return await driver.stat(path)
+
+        if name == "write_file":
+            path = arguments.get("path", "")
+            content = arguments.get("content", "")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return {"success": True, "size": len(content)}
+            except Exception as exc:
+                return {"error": "write_failed", "message": str(exc)}
+
+        if name == "parse_csv":
+            path = arguments.get("path", "")
+            delimiter = arguments.get("delimiter", ",")
+            try:
+                import csv
+
+                with open(path, "r", encoding="utf-8", newline="") as f:
+                    reader = csv.DictReader(f, delimiter=delimiter)
+                    rows = list(reader)
+                return {"rows": rows}
+            except Exception as exc:
+                return {"error": "parse_failed", "message": str(exc)}
+
+        if name == "to_json":
+            data = arguments.get("data", {})
+            path = arguments.get("path", "")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                return {"success": True}
+            except Exception as exc:
+                return {"error": "write_failed", "message": str(exc)}
+
+        if name == "parse_json":
+            path = arguments.get("path", "")
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return {"data": data}
+            except Exception as exc:
+                return {"error": "parse_failed", "message": str(exc)}
+
+        return {"error": "tool_not_found", "tool_name": name}

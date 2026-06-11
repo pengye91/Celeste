@@ -103,6 +103,9 @@ class DummyToolkit(BaseToolkit):
                 return tool
         return None
 
+    async def execute(self, name: str, arguments: dict, driver: Any | None) -> dict:
+        return {"success": True}
+
 
 # ===========================================================================
 # SecurityVerdict model tests

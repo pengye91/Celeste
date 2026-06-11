@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from celeste_dag.core.agent.driver import BaseDriver
 
 
 # Type alias for valid JSON Schema types accepted as parameter types.
@@ -136,6 +139,23 @@ class BaseToolkit(ABC):
     @abstractmethod
     def get_tool(self, name: str) -> ToolDefinition | None:
         """Look up a specific tool by name."""
+
+    @abstractmethod
+    async def execute(
+        self, name: str, arguments: dict[str, Any], driver: "BaseDriver" | None
+    ) -> dict[str, Any]:
+        """Execute a tool by name with the given arguments via a driver.
+
+        Args:
+            name: Tool identifier (must match a tool registered in this toolkit).
+            arguments: Tool-specific arguments parsed from the LLM output.
+            driver: Environment driver providing filesystem, shell, and HTTP
+                operations.  May be ``None`` for tools that do not need a driver.
+
+        Returns:
+            A dict with the tool's result.  On error, returns a dict with an
+            ``"error"`` key describing the failure.
+        """
 
     def to_mcp_schemas(self) -> list[dict[str, Any]]:
         """Convert all tools to MCP schemas."""

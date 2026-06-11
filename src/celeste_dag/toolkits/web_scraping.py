@@ -7,6 +7,8 @@ and downloading files from the web.
 
 from __future__ import annotations
 
+from typing import Any
+
 from celeste_dag.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
 
 
@@ -122,3 +124,70 @@ class WebScrapingToolkit(BaseToolkit):
             if tool.name == name:
                 return tool
         return None
+
+    async def execute(
+        self, name: str, arguments: dict[str, Any], driver: Any | None
+    ) -> dict[str, Any]:
+        """Execute a web-scraping tool."""
+        if name == "http_get":
+            url = arguments.get("url", "")
+            headers = arguments.get("headers") or {}
+            try:
+                import httpx
+
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, headers=headers, follow_redirects=True)
+                return {"status": response.status_code, "body": response.text}
+            except Exception as exc:
+                return {"error": "http_error", "message": str(exc)}
+
+        if name == "http_post":
+            url = arguments.get("url", "")
+            body = arguments.get("body", {})
+            headers = arguments.get("headers") or {}
+            try:
+                import httpx
+
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=body, headers=headers)
+                return {"status": response.status_code, "body": response.text}
+            except Exception as exc:
+                return {"error": "http_error", "message": str(exc)}
+
+        if name == "scrape_page":
+            url = arguments.get("url", "")
+            selector = arguments.get("selector")
+            try:
+                import httpx
+
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, follow_redirects=True)
+                text = response.text
+                if selector:
+                    try:
+                        from bs4 import BeautifulSoup
+
+                        soup = BeautifulSoup(text, "html.parser")
+                        elements = soup.select(selector)
+                        text = "\n".join(el.get_text(strip=True) for el in elements)
+                    except Exception:
+                        pass
+                return {"status": response.status_code, "content": text}
+            except Exception as exc:
+                return {"error": "scrape_error", "message": str(exc)}
+
+        if name == "download_file":
+            url = arguments.get("url", "")
+            destination = arguments.get("destination", "")
+            try:
+                import httpx
+
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, follow_redirects=True)
+                with open(destination, "wb") as f:
+                    f.write(response.content)
+                return {"success": True, "path": destination, "size": len(response.content)}
+            except Exception as exc:
+                return {"error": "download_error", "message": str(exc)}
+
+        return {"error": "tool_not_found", "tool_name": name}

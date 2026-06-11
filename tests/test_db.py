@@ -31,6 +31,7 @@ from celeste_dag.database.models import (
     TaskNode,
     TaskNodeStatus,
     Workflow,
+    WorkflowEvent,
     WorkflowStatus,
 )
 
@@ -265,6 +266,7 @@ class TestInitDb:
         assert "workflows" in tables
         assert "task_nodes" in tables
         assert "task_events" in tables
+        assert "workflow_events" in tables
         await engine.dispose()
 
     async def test_init_db_idempotent(self):
@@ -443,6 +445,44 @@ class TestCrudOperations:
             result = await session.execute(stmt)
             fetched = result.scalar_one()
             assert fetched.event_type == TaskEventType.NODE_STARTED
+
+    async def test_insert_and_query_workflow_event(self):
+        from celeste_dag.database.db import get_session, init_db
+
+        url, _ = _make_file_url()
+        await init_db(url)
+
+        wf_id = uuid.uuid4()
+        event_id = uuid.uuid4()
+
+        async with get_session() as session:
+            wf = Workflow(
+                id=wf_id,
+                name="workflow-event-crud-wf",
+                status=WorkflowStatus.RUNNING,
+                dag_definition={},
+            )
+            session.add(wf)
+            await session.commit()
+
+        async with get_session() as session:
+            event = WorkflowEvent(
+                id=event_id,
+                workflow_id=wf_id,
+                event_type=TaskEventType.WORKFLOW_SUBMITTED,
+                sequence_number=1,
+                event_data={"source": "api"},
+            )
+            session.add(event)
+            await session.commit()
+
+        async with get_session() as session:
+            stmt = select(WorkflowEvent).where(WorkflowEvent.id == event_id)
+            result = await session.execute(stmt)
+            fetched = result.scalar_one()
+            assert fetched.event_type == TaskEventType.WORKFLOW_SUBMITTED
+            assert fetched.sequence_number == 1
+            assert fetched.event_data == {"source": "api"}
 
     async def test_orm_query_workflow(self):
         """Full ORM-style select query through AsyncSession."""

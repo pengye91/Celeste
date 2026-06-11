@@ -97,3 +97,47 @@ class ErrorResponse(BaseModel):
     """Standard error response."""
 
     detail: str
+
+
+# ---------------------------------------------------------------------------
+# Agent management schemas
+# ---------------------------------------------------------------------------
+
+
+class RegisterAgentRequest(BaseModel):
+    """Request body for POST /agents/register."""
+
+    url: str
+    auth_token: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class RegisterAgentResponse(BaseModel):
+    """Response for POST /agents/register."""
+
+    agent_id: str
+    status: str
+
+
+class AgentStatusResponse(BaseModel):
+    """Response for GET /agents/{id}/status."""
+
+    agent_id: str
+    status: str
+    last_seen: str | None
+
+
+class AgentListItem(BaseModel):
+    """Response item for GET /agents listing."""
+
+    agent_id: str
+    url: str
+    status: str
+    metadata: dict
+    registered_at: str
+
+
+class DeleteAgentResponse(BaseModel):
+    """Response for DELETE /agents/{id}."""
+
+    success: bool

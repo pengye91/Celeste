@@ -37,6 +37,26 @@ class TestDefaults:
         s = EngineSettings()
         assert s.ENVIRONMENT == "local"
 
+    def test_snapshot_timeout_ms_default(self) -> None:
+        s = EngineSettings()
+        assert s.SNAPSHOT_TIMEOUT_MS == 5000
+
+    def test_planner_timeout_ms_default(self) -> None:
+        s = EngineSettings()
+        assert s.PLANNER_TIMEOUT_MS == 60000
+
+    def test_max_opa_cycles_default(self) -> None:
+        s = EngineSettings()
+        assert s.MAX_OPA_CYCLES == 100
+
+    def test_max_llm_tokens_default(self) -> None:
+        s = EngineSettings()
+        assert s.MAX_LLM_TOKENS == 50000
+
+    def test_evaluator_cache_enabled_default(self) -> None:
+        s = EngineSettings()
+        assert s.EVALUATOR_CACHE_ENABLED is True
+
     def test_default_database_url(self) -> None:
         s = EngineSettings()
         assert s.DATABASE_URL.get_secret_value() == "sqlite+aiosqlite:///celeste.db"
@@ -203,6 +223,14 @@ class TestValidation:
         for provider in ("anthropic", "openai", "gemini", "ollama"):
             s = EngineSettings(LLM_PROVIDER=provider)
             assert s.LLM_PROVIDER == provider
+
+    def test_snapshot_timeout_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            EngineSettings(SNAPSHOT_TIMEOUT_MS=50)
+
+    def test_max_opa_cycles_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            EngineSettings(MAX_OPA_CYCLES=0)
 
 
 # ---------------------------------------------------------------------------

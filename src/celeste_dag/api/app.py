@@ -14,6 +14,7 @@ the engine lifecycle is bound to FastAPI's startup/shutdown events.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -44,7 +45,13 @@ from celeste_dag.api.schemas import (
     NodeStatusResponse,
     EventResponse,
     ErrorResponse,
+    RegisterAgentRequest,
+    RegisterAgentResponse,
+    AgentStatusResponse,
+    AgentListItem,
+    DeleteAgentResponse,
 )
+from celeste_dag.core.agent.agent import EnvironmentAgent
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +97,7 @@ def create_app(
     # Store engine reference on app state for route handlers
     app.state.engine = engine
     app.state.running_tasks: dict[str, asyncio.Task] = {}
+    app.state.agent_registry: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Health check
@@ -450,5 +458,80 @@ def create_app(
             wf.status = WorkflowStatus.CANCELLED
 
         return WorkflowResponse(workflow_id=workflow_id, status="cancelled")
+
+    # ------------------------------------------------------------------
+    # Agent management endpoints
+    # ------------------------------------------------------------------
+
+    @app.post(
+        "/agents/register",
+        status_code=201,
+        response_model=RegisterAgentResponse,
+        tags=["agents"],
+    )
+    async def register_agent(body: RegisterAgentRequest):
+        """Register a remote agent with the engine."""
+        agent_id = str(uuid.uuid4())
+        agent = EnvironmentAgent.remote(url=body.url, auth_token=body.auth_token)
+        app.state.agent_registry[agent_id] = {
+            "agent": agent,
+            "url": body.url,
+            "metadata": body.metadata or {},
+            "registered_at": datetime.datetime.now(datetime.timezone.utc),
+        }
+        return RegisterAgentResponse(agent_id=agent_id, status="pending")
+
+    @app.get(
+        "/agents/{agent_id}/status",
+        response_model=AgentStatusResponse,
+        tags=["agents"],
+    )
+    async def get_agent_status(agent_id: str):
+        """Return the status of a registered agent."""
+        record = app.state.agent_registry.get(agent_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        agent: EnvironmentAgent = record["agent"]
+        status = "connected" if agent.is_running else "disconnected"
+        last_seen = record["registered_at"]
+        return AgentStatusResponse(
+            agent_id=agent_id,
+            status=status,
+            last_seen=last_seen.isoformat() if last_seen else None,
+        )
+
+    @app.get(
+        "/agents",
+        response_model=list[AgentListItem],
+        tags=["agents"],
+    )
+    async def list_agents():
+        """List all registered agents."""
+        items: list[AgentListItem] = []
+        for agent_id, record in app.state.agent_registry.items():
+            agent: EnvironmentAgent = record["agent"]
+            status = "connected" if agent.is_running else "disconnected"
+            items.append(
+                AgentListItem(
+                    agent_id=agent_id,
+                    url=record["url"],
+                    status=status,
+                    metadata=record["metadata"],
+                    registered_at=record["registered_at"].isoformat(),
+                )
+            )
+        return items
+
+    @app.delete(
+        "/agents/{agent_id}",
+        response_model=DeleteAgentResponse,
+        tags=["agents"],
+    )
+    async def delete_agent(agent_id: str):
+        """Unregister an agent."""
+        if agent_id not in app.state.agent_registry:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        del app.state.agent_registry[agent_id]
+        return DeleteAgentResponse(success=True)
 
     return app

@@ -16,10 +16,11 @@ from sqlalchemy.orm import Session
 from celeste_dag.database.models import (
     Base,
     TaskEvent,
+    TaskEventType,
     TaskNode,
     TaskNodeStatus,
-    TaskEventType,
     Workflow,
+    WorkflowEvent,
     WorkflowStatus,
 )
 
@@ -92,7 +93,7 @@ def sample_workflow(session, sample_workflow_id):
 
 
 class TestTableCreation:
-    """All three tables must be created successfully."""
+    """All tables must be created successfully."""
 
     def test_workflow_table_exists(self, engine):
         inspector = inspect(engine)
@@ -105,6 +106,10 @@ class TestTableCreation:
     def test_task_event_table_exists(self, engine):
         inspector = inspect(engine)
         assert "task_events" in inspector.get_table_names()
+
+    def test_workflow_event_table_exists(self, engine):
+        inspector = inspect(engine)
+        assert "workflow_events" in inspector.get_table_names()
 
 
 # ===========================================================================
@@ -794,10 +799,33 @@ class TestTaskEventTypeEnum:
             "compensation_completed",
             "compensation_failed",
             "state_checkpoint",
+            "workflow_submitted",
+            "workflow_completed",
+            "observation_captured",
+            "plan_generated",
+            "evaluation_result",
+            "precondition_checked",
+            "cycle_started",
+            "checkpoint",
         }
         actual = {e.value for e in TaskEventType}
         assert actual == expected
-        assert len(TaskEventType) == 7
+        assert len(TaskEventType) == 15
+
+    def test_task_event_type_has_new_opa_values(self):
+        """New OPA loop event types must be present in TaskEventType."""
+        opa_types = {
+            "workflow_submitted",
+            "workflow_completed",
+            "observation_captured",
+            "plan_generated",
+            "evaluation_result",
+            "precondition_checked",
+            "cycle_started",
+            "checkpoint",
+        }
+        actual = {e.value for e in TaskEventType}
+        assert opa_types.issubset(actual)
 
     def test_event_type_values(self, session, sample_workflow):
         node = TaskNode(
@@ -822,6 +850,207 @@ class TestTaskEventTypeEnum:
 
         events = session.query(TaskEvent).filter_by(task_node_id=node.id).all()
         assert len(events) == len(TaskEventType)
+
+
+# ===========================================================================
+# WorkflowEvent Model
+# ===========================================================================
+
+
+class TestWorkflowEventCreation:
+    """WorkflowEvent can be created with all fields."""
+
+    def test_create_workflow_event_minimal(self, session, sample_workflow):
+        event = WorkflowEvent(
+            workflow_id=sample_workflow.id,
+            event_type=TaskEventType.WORKFLOW_SUBMITTED,
+            sequence_number=1,
+        )
+        session.add(event)
+        session.flush()
+
+        assert event.id is not None
+        assert isinstance(event.id, uuid.UUID)
+        assert event.workflow_id == sample_workflow.id
+        assert event.task_node_id is None
+        assert event.event_type == TaskEventType.WORKFLOW_SUBMITTED
+        assert event.sequence_number == 1
+        assert event.timestamp is not None
+        assert isinstance(event.timestamp, datetime)
+
+    def test_create_workflow_event_with_task_node(self, session, sample_workflow):
+        node = TaskNode(
+            workflow_id=sample_workflow.id,
+            name="event-node",
+            task_type="llm_call",
+            status=TaskNodeStatus.RUNNING,
+            command="cmd",
+            arguments={},
+        )
+        session.add(node)
+        session.flush()
+
+        event = WorkflowEvent(
+            workflow_id=sample_workflow.id,
+            task_node_id=node.id,
+            event_type=TaskEventType.PLAN_GENERATED,
+            sequence_number=2,
+            event_data={"plan": ["step1", "step2"]},
+        )
+        session.add(event)
+        session.flush()
+
+        assert event.task_node_id == node.id
+        assert event.event_data == {"plan": ["step1", "step2"]}
+
+    def test_workflow_event_sequence_number(self, session, sample_workflow):
+        """Sequence numbers must be stored and ordered correctly."""
+        for i in range(1, 4):
+            event = WorkflowEvent(
+                workflow_id=sample_workflow.id,
+                event_type=TaskEventType.CYCLE_STARTED,
+                sequence_number=i,
+            )
+            session.add(event)
+        session.flush()
+
+        events = (
+            session.query(WorkflowEvent)
+            .filter_by(workflow_id=sample_workflow.id)
+            .order_by(WorkflowEvent.sequence_number)
+            .all()
+        )
+        assert len(events) == 3
+        assert events[0].sequence_number == 1
+        assert events[1].sequence_number == 2
+        assert events[2].sequence_number == 3
+
+    def test_workflow_event_event_data_nullable(self, session, sample_workflow):
+        event = WorkflowEvent(
+            workflow_id=sample_workflow.id,
+            event_type=TaskEventType.WORKFLOW_COMPLETED,
+            sequence_number=1,
+        )
+        session.add(event)
+        session.flush()
+        assert event.event_data is None
+
+    def test_workflow_event_timestamp_auto_set(self, session, sample_workflow):
+        event = WorkflowEvent(
+            workflow_id=sample_workflow.id,
+            event_type=TaskEventType.CHECKPOINT,
+            sequence_number=1,
+        )
+        session.add(event)
+        session.flush()
+        assert event.timestamp is not None
+        assert isinstance(event.timestamp, datetime)
+
+
+class TestWorkflowEventRelationship:
+    """WorkflowEvent relationship to Workflow."""
+
+    def test_workflow_event_relationship_to_workflow(self, session, sample_workflow):
+        event = WorkflowEvent(
+            workflow_id=sample_workflow.id,
+            event_type=TaskEventType.WORKFLOW_SUBMITTED,
+            sequence_number=1,
+        )
+        session.add(event)
+        session.flush()
+
+        result = session.query(WorkflowEvent).first()
+        assert result.workflow_id == sample_workflow.id
+        assert result.workflow == sample_workflow
+
+    def test_workflow_has_workflow_events(self, session, sample_workflow):
+        """Workflow.workflow_events relationship returns WorkflowEvent rows."""
+        for i in range(1, 3):
+            event = WorkflowEvent(
+                workflow_id=sample_workflow.id,
+                event_type=TaskEventType.OBSERVATION_CAPTURED,
+                sequence_number=i,
+            )
+            session.add(event)
+        session.flush()
+
+        assert len(sample_workflow.workflow_events) == 2
+        assert all(
+            isinstance(e, WorkflowEvent) for e in sample_workflow.workflow_events
+        )
+
+    def test_multiple_workflow_events_per_workflow(self, session, sample_workflow):
+        for etype in [
+            TaskEventType.WORKFLOW_SUBMITTED,
+            TaskEventType.PLAN_GENERATED,
+            TaskEventType.WORKFLOW_COMPLETED,
+        ]:
+            event = WorkflowEvent(
+                workflow_id=sample_workflow.id,
+                event_type=etype,
+                sequence_number=1,
+            )
+            session.add(event)
+        session.flush()
+
+        events = (
+            session.query(WorkflowEvent)
+            .filter_by(workflow_id=sample_workflow.id)
+            .all()
+        )
+        assert len(events) == 3
+
+
+# ===========================================================================
+# TaskEvent sequence_number
+# ===========================================================================
+
+
+class TestTaskEventSequenceNumber:
+    """Optional sequence_number on TaskEvent."""
+
+    def test_task_event_sequence_number_default_none(self, session, sample_workflow):
+        node = TaskNode(
+            workflow_id=sample_workflow.id,
+            name="seq-node",
+            task_type="llm_call",
+            status=TaskNodeStatus.PENDING,
+            command="cmd",
+            arguments={},
+        )
+        session.add(node)
+        session.flush()
+
+        event = TaskEvent(
+            task_node_id=node.id,
+            workflow_id=sample_workflow.id,
+            event_type=TaskEventType.NODE_STARTED,
+        )
+        session.add(event)
+        session.flush()
+        assert event.sequence_number is None
+
+    def test_task_event_sequence_number_set(self, session, sample_workflow):
+        node = TaskNode(
+            workflow_id=sample_workflow.id,
+            name="seq-node-2",
+            task_type="llm_call",
+            status=TaskNodeStatus.PENDING,
+            command="cmd",
+            arguments={},
+        )
+        session.add(node)
+        session.flush()
+
+        event = TaskEvent(
+            task_node_id=node.id,
+            workflow_id=sample_workflow.id,
+            event_type=TaskEventType.NODE_STARTED,
+            sequence_number=42,
+        )
+        session.add(event)
+        session.flush()
+        assert event.sequence_number == 42
 
 
 class TestTaskEventJsonFields:
@@ -1087,3 +1316,11 @@ class TestEnumDefinitions:
         assert TaskEventType.NODE_FAILED.value == "node_failed"
         assert TaskEventType.COMPENSATION_TRIGGERED.value == "compensation_triggered"
         assert TaskEventType.STATE_CHECKPOINT.value == "state_checkpoint"
+        assert TaskEventType.WORKFLOW_SUBMITTED.value == "workflow_submitted"
+        assert TaskEventType.WORKFLOW_COMPLETED.value == "workflow_completed"
+        assert TaskEventType.OBSERVATION_CAPTURED.value == "observation_captured"
+        assert TaskEventType.PLAN_GENERATED.value == "plan_generated"
+        assert TaskEventType.EVALUATION_RESULT.value == "evaluation_result"
+        assert TaskEventType.PRECONDITION_CHECKED.value == "precondition_checked"
+        assert TaskEventType.CYCLE_STARTED.value == "cycle_started"
+        assert TaskEventType.CHECKPOINT.value == "checkpoint"

@@ -1724,3 +1724,167 @@ class TestStopReset:
         finally:
             await engine.stop()
 
+
+# ---------------------------------------------------------------------------
+# OPA Loop Integration
+# ---------------------------------------------------------------------------
+
+
+class TestOPALoopIntegration:
+    """Tests for Engine integration with the OPA Loop."""
+
+    @pytest.fixture
+    def settings(self):
+        return EngineSettings(
+            DATABASE_URL=SQLITE_MEMORY_URL,
+            MAX_PARALLEL_SUBPROCESSES=2,
+            MAX_OPA_CYCLES=10,
+            MAX_LLM_TOKENS=5000,
+        )
+
+    @pytest.mark.asyncio
+    async def test_engine_run_opa_loop_integration(self, settings):
+        """Engine.run() uses OPA loop with mocked planner and evaluator."""
+        from celeste_dag.core.engine import Engine
+        from celeste_dag.core.opa_loop import WorkflowResult
+        from celeste_dag.core.planner import DAGFragment
+        from celeste_dag.core.evaluator import EvaluatorDecision
+
+        # Mock agent
+        mock_agent = MagicMock()
+        mock_agent.call_tool = AsyncMock(return_value={"files": {}, "platform": "darwin"})
+        mock_agent.list_tools = AsyncMock(return_value=[])
+
+        # Mock planner that returns a fragment with goal_achieved=True
+        mock_planner = MagicMock()
+        mock_planner.plan = AsyncMock(
+            return_value=DAGFragment(
+                nodes=[],
+                reasoning="Goal achieved",
+                goal_achieved=True,
+            )
+        )
+
+        # Mock evaluator
+        mock_evaluator = MagicMock()
+        mock_evaluator.evaluate = AsyncMock(return_value=EvaluatorDecision.DONE)
+
+        engine = Engine(
+            settings=settings,
+            workspace_factory=lambda: MockWorkspace(),
+        )
+        await engine.start()
+        try:
+            result = await engine.run(
+                goal="test goal",
+                agent=mock_agent,
+                planner=mock_planner,
+                evaluator=mock_evaluator,
+            )
+
+            assert isinstance(result, WorkflowResult)
+            assert result.status == "completed"
+            # Planner should have been called at least once
+            assert mock_planner.plan.call_count >= 1
+            # Evaluator should have been called after each fragment
+            assert mock_evaluator.evaluate.call_count >= 1
+        finally:
+            await engine.stop()
+
+    @pytest.mark.asyncio
+    async def test_engine_run_without_agent_raises(self, settings):
+        """Engine.run() raises if agent is not provided."""
+        from celeste_dag.core.engine import Engine
+
+        engine = Engine(
+            settings=settings,
+            workspace_factory=lambda: MockWorkspace(),
+        )
+        await engine.start()
+        try:
+            with pytest.raises(ValueError, match="agent is required"):
+                await engine.run(goal="test goal")
+        finally:
+            await engine.stop()
+
+    @pytest.mark.asyncio
+    async def test_engine_run_without_planner_raises(self, settings):
+        """Engine.run() raises if planner is not provided."""
+        from celeste_dag.core.engine import Engine
+
+        mock_agent = MagicMock()
+        engine = Engine(
+            settings=settings,
+            workspace_factory=lambda: MockWorkspace(),
+        )
+        await engine.start()
+        try:
+            with pytest.raises(ValueError, match="planner is required"):
+                await engine.run(goal="test goal", agent=mock_agent)
+        finally:
+            await engine.stop()
+
+    @pytest.mark.asyncio
+    async def test_engine_run_without_evaluator_raises(self, settings):
+        """Engine.run() raises if evaluator is not provided."""
+        from celeste_dag.core.engine import Engine
+
+        mock_agent = MagicMock()
+        mock_planner = MagicMock()
+        engine = Engine(
+            settings=settings,
+            workspace_factory=lambda: MockWorkspace(),
+        )
+        await engine.start()
+        try:
+            with pytest.raises(ValueError, match="evaluator is required"):
+                await engine.run(goal="test goal", agent=mock_agent, planner=mock_planner)
+        finally:
+            await engine.stop()
+
+    @pytest.mark.asyncio
+    async def test_engine_run_max_cycles_override(self, settings):
+        """Engine.run() max_cycles parameter overrides settings."""
+        from celeste_dag.core.engine import Engine
+        from celeste_dag.core.opa_loop import WorkflowResult
+        from celeste_dag.core.planner import DAGFragment
+        from celeste_dag.core.evaluator import EvaluatorDecision
+
+        mock_agent = MagicMock()
+        mock_agent.call_tool = AsyncMock(return_value={"files": {}})
+        mock_agent.list_tools = AsyncMock(return_value=[])
+
+        # Planner always returns non-achieved, evaluator always CONTINUE
+        mock_planner = MagicMock()
+        mock_planner.plan = AsyncMock(
+            return_value=DAGFragment(
+                nodes=[],
+                reasoning="continue",
+                goal_achieved=False,
+            )
+        )
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.evaluate = AsyncMock(return_value=EvaluatorDecision.CONTINUE)
+
+        engine = Engine(
+            settings=settings,
+            workspace_factory=lambda: MockWorkspace(),
+        )
+        await engine.start()
+        try:
+            result = await engine.run(
+                goal="never ends",
+                agent=mock_agent,
+                planner=mock_planner,
+                evaluator=mock_evaluator,
+                max_cycles=3,
+            )
+
+            assert isinstance(result, WorkflowResult)
+            assert result.status == "escalated"
+            assert result.reason == "max_cycles_exceeded"
+            assert result.cycle_count == 3
+        finally:
+            await engine.stop()
+

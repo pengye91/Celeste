@@ -7,6 +7,8 @@ dependency management in software projects.
 
 from __future__ import annotations
 
+from typing import Any
+
 from celeste_dag.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
 
 
@@ -130,3 +132,18 @@ class CodingVerticalToolkit(BaseToolkit):
             if tool.name == name:
                 return tool
         return None
+
+    async def execute(
+        self, name: str, arguments: dict[str, Any], driver: Any | None
+    ) -> dict[str, Any]:
+        """Execute a coding-vertical tool (stub implementation)."""
+        known_tools = {
+            "git_status",
+            "git_diff",
+            "run_tests",
+            "lint_code",
+            "install_dependencies",
+        }
+        if name in known_tools:
+            return {"success": True}
+        return {"error": "tool_not_found", "tool_name": name}

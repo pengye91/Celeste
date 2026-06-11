@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from celeste_dag.config.settings import EngineSettings, get_settings
 from celeste_dag.core.planner import DAGPlan
 from celeste_dag.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
 from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
 from celeste_dag.database.db import close_db, get_session, init_db
 from celeste_dag.database.models import (
@@ -44,6 +45,7 @@ from celeste_dag.database.models import (
     TaskNode,
     TaskNodeStatus,
     Workflow,
+    WorkflowEvent,
     WorkflowStatus,
 )
 
@@ -197,7 +199,56 @@ class Engine:
         return wf_id
 
     # ------------------------------------------------------------------
-    # Workflow execution
+    # OPA Loop workflow execution
+    # ------------------------------------------------------------------
+
+    async def run(
+        self,
+        goal: str,
+        agent: Any | None = None,
+        planner: Any | None = None,
+        evaluator: Any | None = None,
+        **kwargs: Any,
+    ) -> WorkflowResult:
+        """Run a workflow using the OPA (Observe-Plan-Act) loop.
+
+        This is the new primary execution method for the Environment Agent
+        Protocol. It runs continuous OPA cycles until the goal is achieved
+        or safety limits are hit.
+
+        Args:
+            goal: The high-level workflow goal.
+            agent: EnvironmentAgent instance. Required.
+            planner: Planner instance. Required.
+            evaluator: Evaluator instance. Required.
+            **kwargs: Additional arguments passed to OPALoop.run()
+                (e.g., max_cycles, max_llm_tokens).
+
+        Returns:
+            WorkflowResult with final status and metrics.
+
+        Raises:
+            ValueError: If agent, planner, or evaluator is not provided.
+        """
+        self._ensure_running()
+
+        if agent is None:
+            raise ValueError("agent is required for OPA loop execution")
+        if planner is None:
+            raise ValueError("planner is required for OPA loop execution")
+        if evaluator is None:
+            raise ValueError("evaluator is required for OPA loop execution")
+
+        loop = OPALoop(
+            agent=agent,
+            planner=planner,
+            evaluator=evaluator,
+            settings=self._settings,
+        )
+        return await loop.run(goal=goal, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Legacy workflow execution
     # ------------------------------------------------------------------
 
     async def run_workflow(self, workflow_id: uuid.UUID) -> None:
@@ -669,6 +720,95 @@ class Engine:
             return FirecrackerWorkspace()
         else:
             raise ValueError(f"Unknown workspace engine: {engine_type}")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Checkpoint integration (Continue-As-New)
+    # ------------------------------------------------------------------
+
+    async def _check_and_checkpoint(
+        self,
+        workflow_id: uuid.UUID,
+        checkpoint_mgr: "CheckpointManager",
+    ) -> uuid.UUID | None:
+        """Check if checkpoint threshold is reached and perform Continue-As-New.
+
+        Returns the new workflow ID if a checkpoint was created, else None.
+        """
+        if not await checkpoint_mgr.should_checkpoint(workflow_id):
+            return None
+
+        # 1. Create checkpoint state
+        checkpoint_state = await checkpoint_mgr.create_checkpoint(workflow_id)
+
+        # 2. Record CHECKPOINT event on old workflow
+        await checkpoint_mgr.record_checkpoint_event(workflow_id, checkpoint_state)
+
+        # 3. Archive old workflow (mark as cancelled)
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            old_wf = result.scalar_one()
+            old_wf.status = WorkflowStatus.CANCELLED
+
+        logger.info(
+            "Archived workflow %s after checkpoint (events >= %d)",
+            workflow_id,
+            checkpoint_mgr._event_threshold,
+        )
+
+        # 4. Create new workflow run with checkpoint as initial state
+        new_wf_id = uuid.uuid4()
+        async with get_session() as session:
+            old_result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            old_workflow = old_result.scalar_one()
+
+            # Merge checkpoint state into dag_definition
+            new_dag_def = dict(old_workflow.dag_definition or {})
+            new_dag_def["_checkpoint_state"] = checkpoint_state
+
+            new_workflow = Workflow(
+                id=new_wf_id,
+                name=old_workflow.name,
+                description=old_workflow.description,
+                status=WorkflowStatus.PENDING,
+                dag_definition=new_dag_def,
+            )
+            session.add(new_workflow)
+
+            # Copy task nodes to new workflow
+            node_result = await session.execute(
+                select(TaskNode).where(TaskNode.workflow_id == workflow_id)
+            )
+            old_nodes = node_result.scalars().all()
+            for old_node in old_nodes:
+                new_node = TaskNode(
+                    workflow_id=new_wf_id,
+                    name=old_node.name,
+                    task_type=old_node.task_type,
+                    status=TaskNodeStatus.PENDING,
+                    command=old_node.command,
+                    arguments=dict(old_node.arguments or {}),
+                    previous_node_ids=list(old_node.previous_node_ids or []),
+                    next_node_ids=list(old_node.next_node_ids or []),
+                    compensation_command=old_node.compensation_command,
+                    compensation_arguments=old_node.compensation_arguments,
+                    max_retries=old_node.max_retries,
+                )
+                session.add(new_node)
+
+        logger.info(
+            "Created new workflow %s from checkpoint of %s",
+            new_wf_id,
+            workflow_id,
+        )
+        return new_wf_id
 
     # ------------------------------------------------------------------
     # Internal helpers

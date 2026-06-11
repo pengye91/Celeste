@@ -285,6 +285,9 @@ class TestBaseToolkitAbstract:
             def get_tool(self, name: str):
                 return None
 
+            async def execute(self, name, arguments, driver):
+                return {"success": True}
+
         tk = DummyToolkit()
         assert tk.name == "dummy"
         assert tk.description == "A dummy toolkit"
@@ -324,6 +327,9 @@ class TestBaseToolkitAbstract:
                     if t.name == name:
                         return t
                 return None
+
+            async def execute(self, name, arguments, driver):
+                return {"success": True}
 
         tk = DummyToolkit()
         schemas = tk.to_mcp_schemas()
@@ -396,9 +402,9 @@ class TestSystemDataToolkit:
         assert "path" in [p.name for p in tool.parameters]
 
     def test_tool_count(self, toolkit):
-        """SystemDataToolkit should have exactly 6 tools."""
+        """SystemDataToolkit should have exactly 10 tools."""
         tools = toolkit.get_tools()
-        assert len(tools) == 6
+        assert len(tools) == 10
 
     def test_all_tools_have_names(self, toolkit):
         for tool in toolkit.get_tools():
@@ -417,7 +423,7 @@ class TestSystemDataToolkit:
 
     def test_all_tools_mcp_schemas_valid(self, toolkit):
         schemas = toolkit.to_mcp_schemas()
-        assert len(schemas) == 6
+        assert len(schemas) == 10
         for schema in schemas:
             assert "name" in schema
             assert "description" in schema
@@ -614,6 +620,175 @@ class TestCodingVerticalToolkit:
     def test_all_tools_unique_names(self, toolkit):
         names = [t.name for t in toolkit.get_tools()]
         assert len(names) == len(set(names))
+
+
+# ===========================================================================
+# Toolkit execute() via driver
+# ===========================================================================
+
+
+class MockDriver:
+    """Fake driver for testing toolkit execute() methods."""
+
+    def __init__(self, files=None, dirs=None, command_results=None, stat_results=None):
+        self._files = files or {}
+        self._dirs = dirs or {}
+        self._command_results = command_results or {}
+        self._stat_results = stat_results or {}
+
+    async def read_file(self, path: str) -> dict:
+        if path in self._files:
+            content = self._files[path]
+            return {"content": content, "size": len(content)}
+        raise FileNotFoundError(path)
+
+    async def list_directory(self, path: str) -> dict:
+        if path in self._dirs:
+            return {"files": list(self._dirs[path])}
+        return {"files": []}
+
+    async def run_command(self, command: str, args=None, cwd=None, timeout=None) -> dict:
+        key = command + " " + " ".join(args or [])
+        if key in self._command_results:
+            return self._command_results[key]
+        return {"exit_code": 0, "stdout": "", "stderr": ""}
+
+    async def stat(self, path: str) -> dict:
+        if path in self._stat_results:
+            return self._stat_results[path]
+        return {"size": 0, "modified_time": None, "permissions": None}
+
+
+class TestSystemDataToolkitExecute:
+    """Tests for SystemDataToolkit.execute() via driver."""
+
+    @pytest.fixture()
+    def toolkit(self):
+        from celeste_dag.toolkits.system_data import SystemDataToolkit
+
+        return SystemDataToolkit()
+
+    @pytest.fixture()
+    def driver(self):
+        return MockDriver(
+            files={"/tmp/test.txt": "hello world"},
+            dirs={"/tmp": ["test.txt", "other.py"]},
+            command_results={"echo hello": {"exit_code": 0, "stdout": "hello", "stderr": ""}},
+            stat_results={"/tmp/test.txt": {"size": 11, "modified_time": 1234567890.0, "permissions": "644"}},
+        )
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_read_file(self, toolkit, driver):
+        result = await toolkit.execute("read_file", {"path": "/tmp/test.txt"}, driver)
+        assert result["content"] == "hello world"
+        assert result["size"] == 11
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_list_directory(self, toolkit, driver):
+        result = await toolkit.execute("list_directory", {"path": "/tmp"}, driver)
+        assert "files" in result
+        assert "test.txt" in result["files"]
+        assert "other.py" in result["files"]
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_run_command(self, toolkit, driver):
+        result = await toolkit.execute(
+            "run_command",
+            {"command": "echo", "args": ["hello"]},
+            driver,
+        )
+        assert result["exit_code"] == 0
+        assert result["stdout"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_snapshot(self, toolkit, driver):
+        result = await toolkit.execute("snapshot", {"paths": ["/tmp"]}, driver)
+        assert "files" in result
+        assert result["platform"] in ("darwin", "linux", "win32", "")
+        # snapshot should walk directories
+        assert isinstance(result["files"], dict)
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_check_command(self, toolkit, driver):
+        driver_with_which = MockDriver(
+            command_results={
+                "which python": {"exit_code": 0, "stdout": "/usr/bin/python", "stderr": ""},
+            },
+        )
+        result = await toolkit.execute("check_command", {"command": "python"}, driver_with_which)
+        assert result["available"] is True
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_stat(self, toolkit, driver):
+        result = await toolkit.execute("stat", {"path": "/tmp/test.txt"}, driver)
+        assert result["size"] == 11
+        assert result["modified_time"] == 1234567890.0
+        assert result["permissions"] == "644"
+
+    @pytest.mark.asyncio
+    async def test_system_data_toolkit_unknown_tool(self, toolkit, driver):
+        result = await toolkit.execute("nonexistent", {}, driver)
+        assert "error" in result
+        assert result["error"] == "tool_not_found"
+
+
+class TestWebScrapingToolkitExecute:
+    """Tests for WebScrapingToolkit.execute() via driver."""
+
+    @pytest.fixture()
+    def toolkit(self):
+        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+
+        return WebScrapingToolkit()
+
+    @pytest.mark.asyncio
+    async def test_web_scraping_toolkit_http_get(self, toolkit):
+        import httpx
+
+        # Mock the HTTP call by patching httpx.AsyncClient.get
+        class FakeResponse:
+            status_code = 200
+            text = "<html>hello</html>"
+
+        original_get = httpx.AsyncClient.get
+
+        async def fake_get(*args, **kwargs):
+            return FakeResponse()
+
+        httpx.AsyncClient.get = fake_get
+        try:
+            result = await toolkit.execute("http_get", {"url": "https://example.com"}, None)
+            assert result["status"] == 200
+            assert result["body"] == "<html>hello</html>"
+        finally:
+            httpx.AsyncClient.get = original_get
+
+    @pytest.mark.asyncio
+    async def test_web_scraping_toolkit_unknown_tool(self, toolkit):
+        result = await toolkit.execute("nonexistent", {}, None)
+        assert "error" in result
+        assert result["error"] == "tool_not_found"
+
+
+class TestCodingVerticalToolkitExecute:
+    """Tests for CodingVerticalToolkit.execute() via driver."""
+
+    @pytest.fixture()
+    def toolkit(self):
+        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
+
+        return CodingVerticalToolkit()
+
+    @pytest.mark.asyncio
+    async def test_coding_vertical_toolkit_execute(self, toolkit):
+        result = await toolkit.execute("git_status", {"path": "/tmp"}, None)
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_coding_vertical_toolkit_unknown_tool(self, toolkit):
+        result = await toolkit.execute("nonexistent", {}, None)
+        assert "error" in result
+        assert result["error"] == "tool_not_found"
 
 
 # ===========================================================================
