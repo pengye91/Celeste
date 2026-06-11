@@ -36,6 +36,7 @@ from celeste.database.models import (
     Workflow,
     WorkflowEvent,
     WorkflowStatus,
+    _utcnow,
 )
 from sqlalchemy import select
 
@@ -423,9 +424,23 @@ class OPALoop:
                 )
             elif decision == "ESCALATE" or decision == EvaluatorDecision.ESCALATE:
                 reason = getattr(decision, "reason", "evaluator_escalated")
-                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                # Tier 4: human escalation -- pause workflow and persist state.
+                await self._pause_workflow(
+                    workflow_id,
+                    reason=reason,
+                    cycle_count=cycle_count,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    history=history,
+                )
+                seq += 1
+                await self._emit_workflow_event(
+                    workflow_id,
+                    TaskEventType.WORKFLOW_PAUSED,
+                    {"reason": reason, "cycle": cycle_count},
+                    seq,
+                )
                 return WorkflowResult(
-                    status="escalated",
+                    status="paused",
                     reason=reason,
                     cycle_count=cycle_count,
                     llm_tokens_accumulated=llm_tokens_accumulated,
@@ -493,6 +508,296 @@ class OPALoop:
                     sequence_number=sequence_number,
                 )
             )
+
+    async def _pause_workflow(
+        self,
+        workflow_id: uuid.UUID,
+        reason: str,
+        cycle_count: int,
+        llm_tokens_accumulated: int,
+        history: list[dict[str, Any]],
+    ) -> None:
+        """Pause a workflow and persist loop state for later resume."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+            if workflow is None:
+                return
+
+            workflow.status = WorkflowStatus.PAUSED
+            workflow.paused_at = _utcnow()
+
+            # Serialize loop state into dag_definition.
+            dag_def = dict(workflow.dag_definition or {})
+            dag_def["_opa_state"] = {
+                "cycle_count": cycle_count,
+                "llm_tokens_accumulated": llm_tokens_accumulated,
+                "history": history,
+                "pause_reason": reason,
+            }
+            workflow.dag_definition = dag_def
+
+    async def resume(
+        self,
+        workflow_id: uuid.UUID,
+        human_input: str,
+    ) -> WorkflowResult:
+        """Resume a paused workflow with human guidance.
+
+        Loads the workflow, verifies it is PAUSED, restores loop state from
+        dag_definition["_opa_state"], injects human_input into the next
+        observation, and continues the OPA loop.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+            if workflow is None:
+                raise ValueError(f"Workflow {workflow_id} not found")
+            if workflow.status != WorkflowStatus.PAUSED:
+                raise ValueError(
+                    f"Workflow {workflow_id} is not paused (status={workflow.status.value})"
+                )
+
+            opa_state = workflow.dag_definition.get("_opa_state", {}) if workflow.dag_definition else {}
+            cycle_count = opa_state.get("cycle_count", 0)
+            llm_tokens_accumulated = opa_state.get("llm_tokens_accumulated", 0)
+            history = list(opa_state.get("history", []))
+
+            # Record human_input and clear paused_at even when resume is
+            # called directly (Engine.resume_workflow() also does this).
+            workflow.human_input = human_input
+            workflow.paused_at = None
+
+        # Find the max sequence number to continue monotonic ordering.
+        async with get_session() as session:
+            result = await session.execute(
+                select(WorkflowEvent)
+                .where(WorkflowEvent.workflow_id == workflow_id)
+                .order_by(WorkflowEvent.sequence_number.desc())
+                .limit(1)
+            )
+            last_event = result.scalar_one_or_none()
+            seq = last_event.sequence_number if last_event else 0
+
+        seq += 1
+        await self._emit_workflow_event(
+            workflow_id,
+            TaskEventType.HUMAN_INPUT_RECEIVED,
+            {"human_input": human_input},
+            seq,
+        )
+
+        seq += 1
+        await self._emit_workflow_event(
+            workflow_id,
+            TaskEventType.WORKFLOW_RESUMED,
+            {"cycle": cycle_count},
+            seq,
+        )
+
+        # Inject human input as an artificial observation and continue looping.
+        max_cycles = self._settings.MAX_OPA_CYCLES
+        max_llm_tokens = self._settings.MAX_LLM_TOKENS
+
+        # We don't have an agent here in the Engine.resume_workflow path,
+        # so resume requires agent/planner/evaluator to be set on the loop.
+        if self._agent is None or self._planner is None or self._evaluator is None:
+            raise ValueError("Agent, planner, and evaluator are required to resume a workflow")
+
+        while True:
+            cycle_count += 1
+            if cycle_count > max_cycles:
+                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                return WorkflowResult(
+                    status="escalated",
+                    reason="max_cycles_exceeded",
+                    cycle_count=cycle_count - 1,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+
+            llm_tokens_accumulated += 100
+            if llm_tokens_accumulated >= max_llm_tokens:
+                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                return WorkflowResult(
+                    status="escalated",
+                    reason="token_budget_exceeded",
+                    cycle_count=cycle_count,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+
+            seq += 1
+            await self._emit_workflow_event(
+                workflow_id,
+                TaskEventType.CYCLE_STARTED,
+                {"cycle": cycle_count},
+                seq,
+            )
+
+            try:
+                observation = await self._agent.call_tool("snapshot", {})
+            except Exception as exc:
+                logger.error("Agent unreachable during observation: %s", exc)
+                await self._update_workflow_status(workflow_id, WorkflowStatus.FAILED)
+                return WorkflowResult(
+                    status="failed",
+                    reason="agent_unreachable",
+                    cycle_count=cycle_count - 1,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+
+            # Inject human_input into the observation for the planner.
+            if isinstance(observation, dict):
+                observation["human_input"] = human_input
+            else:
+                observation = {"raw": observation, "human_input": human_input}
+
+            seq += 1
+            await self._emit_workflow_event(
+                workflow_id,
+                TaskEventType.OBSERVATION_CAPTURED,
+                {"observation": observation},
+                seq,
+            )
+
+            try:
+                tool_schemas = await self._agent.list_tools()
+            except Exception as exc:
+                logger.error("Agent unreachable listing tools: %s", exc)
+                await self._update_workflow_status(workflow_id, WorkflowStatus.FAILED)
+                return WorkflowResult(
+                    status="failed",
+                    reason="agent_unreachable",
+                    cycle_count=cycle_count - 1,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+
+            try:
+                fragment = await self._planner.plan(
+                    goal=workflow.name,
+                    observation=observation,
+                    tool_schemas=tool_schemas,
+                    history=history,
+                )
+            except PlannerTimeoutError:
+                if cycle_count == 1:
+                    await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                    return WorkflowResult(
+                        status="escalated",
+                        reason="planner_timeout_no_progress",
+                        cycle_count=cycle_count,
+                        llm_tokens_accumulated=llm_tokens_accumulated,
+                        workflow_id=workflow_id,
+                    )
+                continue
+
+            seq += 1
+            await self._emit_workflow_event(
+                workflow_id,
+                TaskEventType.PLAN_GENERATED,
+                {
+                    "cycle": cycle_count,
+                    "dag_def": fragment.model_dump(),
+                    "reasoning": fragment.reasoning,
+                },
+                seq,
+            )
+
+            await self._persist_fragment(workflow_id, fragment)
+
+            exec_result = await self._execute_with_retries(fragment)
+            completed_node_names: set[str] = set()
+            failed_node_names: set[str] = set()
+            completed_node_names.update(exec_result.get("completed", []))
+            failed_node_names.update(exec_result.get("failed", []))
+
+            if exec_result.get("failed"):
+                has_compensation = any(
+                    n.compensation_command
+                    for n in fragment.nodes
+                    if n.name in completed_node_names
+                )
+                if has_compensation:
+                    await self._trigger_compensation(workflow_id, fragment, completed_node_names)
+                    await self._update_workflow_status(workflow_id, WorkflowStatus.FAILED)
+                    return WorkflowResult(
+                        status="failed",
+                        reason="node_failure",
+                        cycle_count=cycle_count,
+                        llm_tokens_accumulated=llm_tokens_accumulated,
+                        workflow_id=workflow_id,
+                    )
+
+            decision = await self._evaluator.evaluate(fragment, workflow.name)
+
+            seq += 1
+            await self._emit_workflow_event(
+                workflow_id,
+                TaskEventType.EVALUATION_RESULT,
+                {
+                    "cycle": cycle_count,
+                    "decision": decision.name if hasattr(decision, "name") else str(decision),
+                    "reason": getattr(decision, "reason", ""),
+                },
+                seq,
+            )
+
+            history.append({
+                "cycle": cycle_count,
+                "observation": observation,
+                "fragment": fragment.model_dump() if hasattr(fragment, "model_dump") else repr(fragment),
+                "execution": exec_result,
+                "decision": decision.name if hasattr(decision, "name") else str(decision),
+                "decision_reason": getattr(decision, "reason", ""),
+            })
+            history = self._maybe_summarize_history(history)
+
+            if getattr(fragment, "goal_achieved", False):
+                decision = EvaluatorDecision.DONE
+
+            if decision == "DONE" or decision == EvaluatorDecision.DONE:
+                await self._update_workflow_status(workflow_id, WorkflowStatus.COMPLETED)
+                return WorkflowResult(
+                    status="completed",
+                    reason="Goal achieved",
+                    cycle_count=cycle_count,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+            elif decision == "ESCALATE" or decision == EvaluatorDecision.ESCALATE:
+                reason = getattr(decision, "reason", "evaluator_escalated")
+                await self._pause_workflow(
+                    workflow_id,
+                    reason=reason,
+                    cycle_count=cycle_count,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    history=history,
+                )
+                seq += 1
+                await self._emit_workflow_event(
+                    workflow_id,
+                    TaskEventType.WORKFLOW_PAUSED,
+                    {"reason": reason, "cycle": cycle_count},
+                    seq,
+                )
+                return WorkflowResult(
+                    status="paused",
+                    reason=reason,
+                    cycle_count=cycle_count,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+            elif decision == "REPLAN" or decision == EvaluatorDecision.REPLAN:
+                continue
+            else:
+                continue
 
     async def _persist_fragment(
         self,

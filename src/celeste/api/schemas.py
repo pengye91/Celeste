@@ -93,6 +93,12 @@ class EventResponse(BaseModel):
     timestamp: str
 
 
+class ResumeWorkflowRequest(BaseModel):
+    """Request body for POST /api/workflows/{id}/resume."""
+
+    human_input: str = Field(min_length=1, max_length=10240)
+
+
 class ErrorResponse(BaseModel):
     """Standard error response."""
 

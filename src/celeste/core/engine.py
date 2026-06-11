@@ -247,6 +247,62 @@ class Engine:
         )
         return await loop.run(goal=goal, **kwargs)
 
+    async def resume_workflow(
+        self,
+        workflow_id: uuid.UUID,
+        human_input: str,
+        agent: Any | None = None,
+        planner: Any | None = None,
+        evaluator: Any | None = None,
+    ) -> WorkflowResult:
+        """Resume a paused workflow with human guidance.
+
+        Args:
+            workflow_id: UUID of the paused workflow.
+            human_input: Guidance from the human operator.
+            agent: EnvironmentAgent instance. Required if not already provided.
+            planner: Planner instance. Required if not already provided.
+            evaluator: Evaluator instance. Required if not already provided.
+
+        Returns:
+            WorkflowResult after the resumed workflow completes or pauses again.
+
+        Raises:
+            ValueError: If workflow not found or not in PAUSED state.
+        """
+        self._ensure_running()
+
+        # Atomic update: only succeed if status is still 'paused'.
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+            if workflow is None:
+                raise ValueError(f"Workflow {workflow_id} not found")
+
+            from sqlalchemy import update
+            from celeste.database.models import _utcnow
+
+            stmt = (
+                update(Workflow)
+                .where(Workflow.id == workflow_id, Workflow.status == WorkflowStatus.PAUSED)
+                .values(status=WorkflowStatus.RUNNING, human_input=human_input, paused_at=None)
+            )
+            res = await session.execute(stmt)
+            if res.rowcount == 0:
+                raise ValueError(
+                    f"Workflow {workflow_id} is not paused (status={workflow.status.value})"
+                )
+
+        loop = OPALoop(
+            agent=agent,
+            planner=planner,
+            evaluator=evaluator,
+            settings=self._settings,
+        )
+        return await loop.resume(workflow_id, human_input)
+
     # ------------------------------------------------------------------
     # Legacy workflow execution
     # ------------------------------------------------------------------
