@@ -526,43 +526,137 @@ class TestGitWorktreeContextManager:
 
 
 # ===========================================================================
-# DockerWorkspace (Stub)
+# DockerWorkspace
 # ===========================================================================
 
 
-class TestDockerWorkspaceStub:
-    """DockerWorkspace is a stub that raises NotImplementedError."""
+class TestDockerWorkspace:
+    """DockerWorkspace uses Docker CLI via asyncio subprocess."""
 
     @pytest.mark.asyncio
-    async def test_setup_defines_config(self):
+    async def test_setup_starts_container(self, monkeypatch):
         from celeste.core.workspaces.docker import DockerWorkspace
 
+        called = []
+
+        async def fake_run(*cmd, stdout=None, stderr=None):
+            called.append(cmd)
+            return FakeProcess(returncode=0, stdout=b"container-id-123", stderr=b"")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_run)
+
         ws = DockerWorkspace(image="python:3.11")
-        # Setup should work (just defines config)
         await ws.setup()
+        assert ws.is_active is True
         assert ws.container_config is not None
         assert ws.container_config["image"] == "python:3.11"
+        assert any("run" in str(arg) for arg in called[0])
         await ws.teardown()
 
     @pytest.mark.asyncio
-    async def test_execute_raises_not_implemented(self):
+    async def test_execute_runs_command_in_container(self, monkeypatch):
         from celeste.core.workspaces.docker import DockerWorkspace
+
+        proc_index = [0]
+        outputs = [
+            (0, b"container-id", b""),  # setup
+            (
+                0,
+                b'{"exit_code": 0, "stdout": "hello\\nworld", "stderr": ""}',
+                b"",
+            ),  # execute
+            (0, b"", b""),  # teardown stop
+            (0, b"", b""),  # teardown rm
+        ]
+
+        async def fake_run(*cmd, stdout=None, stderr=None):
+            idx = proc_index[0]
+            proc_index[0] += 1
+            return FakeProcess(returncode=outputs[idx][0], stdout=outputs[idx][1], stderr=outputs[idx][2])
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_run)
 
         ws = DockerWorkspace(image="python:3.11")
         await ws.setup()
-        with pytest.raises(NotImplementedError, match="[Dd]ocker"):
-            async for _ in ws.execute("echo hello"):
-                pass
+        events = []
+        async for evt in ws.execute("echo hello"):
+            events.append(evt)
+
+        assert any(e.event_type == "stdout_line" and e.data == "hello" for e in events)
+        assert any(e.event_type == "stdout_line" and e.data == "world" for e in events)
+        assert any(e.event_type == "execution_completed" for e in events)
         await ws.teardown()
 
     @pytest.mark.asyncio
-    async def test_teardown_is_safe(self):
+    async def test_execute_failure_reported(self, monkeypatch):
         from celeste.core.workspaces.docker import DockerWorkspace
+
+        proc_index = [0]
+        outputs = [
+            (0, b"container-id", b""),  # setup
+            (
+                0,
+                b'{"exit_code": 1, "stdout": "", "stderr": "error msg"}',
+                b"",
+            ),  # execute
+            (0, b"", b""),  # teardown stop
+            (0, b"", b""),  # teardown rm
+        ]
+
+        async def fake_run(*cmd, stdout=None, stderr=None):
+            idx = proc_index[0]
+            proc_index[0] += 1
+            return FakeProcess(returncode=outputs[idx][0], stdout=outputs[idx][1], stderr=outputs[idx][2])
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_run)
 
         ws = DockerWorkspace(image="python:3.11")
         await ws.setup()
-        await ws.teardown()  # Should not raise
+        events = []
+        async for evt in ws.execute("false"):
+            events.append(evt)
+
+        assert any(e.event_type == "execution_failed" for e in events)
+        await ws.teardown()
+
+    @pytest.mark.asyncio
+    async def test_teardown_is_safe(self, monkeypatch):
+        from celeste.core.workspaces.docker import DockerWorkspace
+
+        async def fake_run(*cmd, **kw):
+            return FakeProcess(returncode=0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_run)
+
+        ws = DockerWorkspace(image="python:3.11")
+        await ws.setup()
+        await ws.teardown()
         assert ws.is_active is False
+
+    @pytest.mark.asyncio
+    async def test_setup_raises_when_docker_missing(self, monkeypatch):
+        from celeste.core.workspaces.docker import DockerWorkspace
+
+        async def fake_run(*cmd, **kw):
+            raise FileNotFoundError("docker")
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_run)
+
+        ws = DockerWorkspace(image="python:3.11")
+        with pytest.raises(RuntimeError, match="Docker CLI not found"):
+            await ws.setup()
+
+
+class FakeProcess:
+    """Minimal asyncio.Process stand-in for monkeypatching."""
+
+    def __init__(self, returncode: int, stdout: bytes, stderr: bytes) -> None:
+        self.returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._stdout, self._stderr
 
 
 # ===========================================================================

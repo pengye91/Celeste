@@ -646,3 +646,57 @@ class TestSecurityIntegration:
         assert verdict.is_safe is False
         # Even though rm is in registry, security auditor blocks it
         # (The registry just tracks allowed binaries, not safety)
+
+
+# ===========================================================================
+# Toolkit audit hooks
+# ===========================================================================
+
+
+class TestToolkitAudit:
+    """SecurityAuditor.audit_tool_call blocks dangerous toolkit operations."""
+
+    def test_audit_tool_call_blocks_wildcard_update(self):
+        from celeste.tools.security_auditor import SecurityAuditor
+
+        auditor = SecurityAuditor(llm_client=DummyLLMClient())
+        verdict = auditor.audit_tool_call(
+            "query_database",
+            {"sql": "UPDATE batches SET status='x' WHERE batch_id='*'"},
+        )
+        assert verdict is not None
+        assert verdict.is_safe is False
+        assert "sql_wildcard_update" in verdict.detected_threats
+
+    def test_audit_tool_call_blocks_drop_table(self):
+        from celeste.tools.security_auditor import SecurityAuditor
+
+        auditor = SecurityAuditor(llm_client=DummyLLMClient())
+        verdict = auditor.audit_tool_call(
+            "query_database",
+            {"sql": "DROP TABLE residents"},
+        )
+        assert verdict is not None
+        assert verdict.is_safe is False
+        assert "sql_drop_table" in verdict.detected_threats
+
+    def test_audit_tool_call_allows_safe_sql(self):
+        from celeste.tools.security_auditor import SecurityAuditor
+
+        auditor = SecurityAuditor(llm_client=DummyLLMClient())
+        verdict = auditor.audit_tool_call(
+            "query_database",
+            {"sql": "SELECT * FROM batches WHERE batch_id = 'B-123'"},
+        )
+        assert verdict is None
+
+    def test_audit_tool_call_delegates_run_command(self):
+        from celeste.tools.security_auditor import SecurityAuditor
+
+        auditor = SecurityAuditor(llm_client=DummyLLMClient())
+        verdict = auditor.audit_tool_call(
+            "run_command",
+            {"command": "rm -rf /"},
+        )
+        assert verdict is not None
+        assert verdict.is_safe is False

@@ -9,7 +9,7 @@ Checks commands/actions BEFORE execution using a two-phase approach:
 from __future__ import annotations
 
 import re
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel
 
@@ -31,6 +31,30 @@ class SecurityVerdict(BaseModel):
 
 # Each entry is (compiled_regex, threat_name, default_risk_level).
 # Order matters: more specific patterns should come first.
+# SQL/toolkit-specific blocked patterns (wildcards, destructive ops).
+_TOOLKIT_BLOCKED_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
+    (
+        re.compile(r"UPDATE\s+\w+\s+SET\s+.*WHERE\s+.*=\s*['\"]?\*", re.IGNORECASE),
+        "sql_wildcard_update",
+        "critical",
+    ),
+    (
+        re.compile(r"DELETE\s+FROM\s+\w+\s+WHERE\s+.*=\s*['\"]?\*", re.IGNORECASE),
+        "sql_wildcard_delete",
+        "critical",
+    ),
+    (
+        re.compile(r"\bDROP\s+TABLE\b", re.IGNORECASE),
+        "sql_drop_table",
+        "critical",
+    ),
+    (
+        re.compile(r"\bDELETE\s+FROM\s+\w+\b", re.IGNORECASE),
+        "sql_unscoped_delete",
+        "high",
+    ),
+]
+
 _BLOCKED_PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     # --- Fork bomb ---
     (
@@ -135,6 +159,36 @@ class SecurityAuditor:
                     reason=f"Blocked pattern detected: {threat_name}",
                     detected_threats=[threat_name],
                 )
+
+        return None
+
+    def audit_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> SecurityVerdict | None:
+        """Fast deterministic audit for toolkit tool calls.
+
+        Checks SQL commands, REST payloads, and file operations for
+        dangerous patterns. Returns ``None`` if safe, or a
+        ``SecurityVerdict`` if blocked.
+        """
+        payload = " ".join(str(v) for v in arguments.values() if isinstance(v, str))
+
+        # Check SQL/toolkit patterns
+        for pattern, threat_name, risk_level in _TOOLKIT_BLOCKED_PATTERNS:
+            if pattern.search(payload):
+                return SecurityVerdict(
+                    is_safe=False,
+                    risk_level=cast(Literal["safe", "low", "medium", "high", "critical"], risk_level),
+                    reason=f"Blocked toolkit pattern detected: {threat_name}",
+                    detected_threats=[threat_name],
+                )
+
+        # Also run shell command patterns if the tool is run_command
+        if tool_name in ("run_command", "execute_shell"):
+            command = arguments.get("command", "")
+            return self.check_deterministic(command)
 
         return None
 
