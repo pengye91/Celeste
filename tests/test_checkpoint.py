@@ -1,5 +1,5 @@
 """
-Tests for Continue-As-New checkpointing in celeste_dag.core.checkpoint.
+Tests for Continue-As-New checkpointing in celeste.core.checkpoint.
 
 Follows strict TDD: these tests are written BEFORE the implementation.
 
@@ -20,9 +20,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy import func, select
 
-from celeste_dag.config.settings import EngineSettings
-from celeste_dag.core.planner import DAGNode, DAGPlan
-from celeste_dag.database.models import (
+from celeste.config.settings import EngineSettings
+from celeste.core.planner import DAGNode, DAGPlan
+from celeste.database.models import (
     TaskEventType,
     TaskNode,
     TaskNodeStatus,
@@ -68,7 +68,7 @@ SAMPLE_PLAN = DAGPlan(
 @pytest.fixture(autouse=True)
 def _reset_db_module():
     """Reset database module state between tests."""
-    import celeste_dag.database.db as db_mod
+    import celeste.database.db as db_mod
 
     db_mod._engine = None
     db_mod._async_session_factory = None
@@ -98,7 +98,7 @@ def settings():
 @pytest.fixture
 async def db_session(settings):
     """Provide an initialized database session."""
-    from celeste_dag.database.db import get_session, init_db
+    from celeste.database.db import get_session, init_db
 
     await init_db(settings=settings)
     async with get_session() as session:
@@ -115,7 +115,7 @@ class TestCheckpointManagerCreation:
 
     @pytest.mark.asyncio
     async def test_create_with_settings(self, settings):
-        from celeste_dag.core.checkpoint import CheckpointManager
+        from celeste.core.checkpoint import CheckpointManager
 
         mgr = CheckpointManager(settings=settings, event_threshold=100)
         assert mgr._settings is settings
@@ -123,7 +123,7 @@ class TestCheckpointManagerCreation:
 
     @pytest.mark.asyncio
     async def test_default_threshold(self, settings):
-        from celeste_dag.core.checkpoint import CheckpointManager
+        from celeste.core.checkpoint import CheckpointManager
 
         mgr = CheckpointManager(settings=settings)
         assert mgr._event_threshold == 500
@@ -140,8 +140,8 @@ class TestShouldCheckpoint:
     @pytest.mark.asyncio
     async def test_checkpoint_triggered_at_threshold(self, settings):
         """When WorkflowEvent count >= threshold, should_checkpoint returns True."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings, event_threshold=5)
@@ -175,8 +175,8 @@ class TestShouldCheckpoint:
     @pytest.mark.asyncio
     async def test_checkpoint_not_triggered_below_threshold(self, settings):
         """When WorkflowEvent count < threshold, should_checkpoint returns False."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings, event_threshold=10)
@@ -207,8 +207,8 @@ class TestShouldCheckpoint:
     @pytest.mark.asyncio
     async def test_checkpoint_triggered_above_threshold(self, settings):
         """When WorkflowEvent count > threshold, should_checkpoint returns True."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings, event_threshold=3)
@@ -239,8 +239,8 @@ class TestShouldCheckpoint:
     @pytest.mark.asyncio
     async def test_zero_events_never_triggers(self, settings):
         """A workflow with zero events should never trigger checkpoint."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings, event_threshold=1)
@@ -271,8 +271,8 @@ class TestCreateCheckpoint:
     @pytest.mark.asyncio
     async def test_checkpoint_contains_full_state(self, settings):
         """Checkpoint dict contains goal, context, completed/failed node IDs, cycle_count, tokens."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings)
@@ -334,8 +334,8 @@ class TestCreateCheckpoint:
     @pytest.mark.asyncio
     async def test_checkpoint_empty_workflow(self, settings):
         """Checkpoint for a workflow with no nodes has empty lists."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings)
@@ -360,8 +360,8 @@ class TestCreateCheckpoint:
     @pytest.mark.asyncio
     async def test_checkpoint_only_completed_nodes(self, settings):
         """Only completed nodes appear in completed_node_ids."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings)
@@ -419,8 +419,8 @@ class TestRecordCheckpointEvent:
     @pytest.mark.asyncio
     async def test_record_creates_checkpoint_event(self, settings):
         """A WorkflowEvent with type CHECKPOINT is created in the DB."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings)
@@ -459,8 +459,8 @@ class TestRecordCheckpointEvent:
     @pytest.mark.asyncio
     async def test_record_preserves_checkpoint_data(self, settings):
         """The checkpoint_state is stored exactly in event_data."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         mgr = CheckpointManager(settings=settings)
@@ -509,7 +509,7 @@ class TestResumeFromCheckpoint:
     @pytest.mark.asyncio
     async def test_resume_from_checkpoint(self, settings):
         """Returns a dict with all fields needed to resume workflow execution."""
-        from celeste_dag.core.checkpoint import CheckpointManager
+        from celeste.core.checkpoint import CheckpointManager
 
         mgr = CheckpointManager(settings=settings)
 
@@ -534,7 +534,7 @@ class TestResumeFromCheckpoint:
     @pytest.mark.asyncio
     async def test_resume_returns_same_keys(self, settings):
         """resume_from_checkpoint preserves all keys from checkpoint_state."""
-        from celeste_dag.core.checkpoint import CheckpointManager
+        from celeste.core.checkpoint import CheckpointManager
 
         mgr = CheckpointManager(settings=settings)
 
@@ -562,9 +562,9 @@ class TestEngineCheckpointIntegration:
     @pytest.mark.asyncio
     async def test_engine_calls_checkpoint_at_end_of_cycle(self, settings):
         """Engine._check_and_checkpoint is called after OPA cycle processing."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.core.engine import Engine
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.core.engine import Engine
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         engine = Engine(settings=settings)
@@ -579,9 +579,9 @@ class TestEngineCheckpointIntegration:
     @pytest.mark.asyncio
     async def test_checkpoint_archives_old_workflow(self, settings):
         """When checkpointing, old workflow is marked as archived."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.core.engine import Engine
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.core.engine import Engine
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         engine = Engine(settings=settings)
@@ -625,9 +625,9 @@ class TestEngineCheckpointIntegration:
     @pytest.mark.asyncio
     async def test_checkpoint_creates_new_workflow(self, settings):
         """When checkpointing, a new workflow run is created with checkpoint state."""
-        from celeste_dag.core.checkpoint import CheckpointManager
-        from celeste_dag.core.engine import Engine
-        from celeste_dag.database.db import get_session, init_db
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.core.engine import Engine
+        from celeste.database.db import get_session, init_db
 
         await init_db(settings=settings)
         engine = Engine(settings=settings)

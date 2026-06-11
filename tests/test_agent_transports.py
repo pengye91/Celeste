@@ -30,7 +30,7 @@ class MockAgent:
 @pytest.mark.asyncio
 async def test_in_process_transport_direct_call():
     """InProcessTransport should call agent methods directly without serialization."""
-    from celeste_dag.core.agent.transport import InProcessTransport
+    from celeste.core.agent.transport import InProcessTransport
 
     agent = MockAgent()
     transport = InProcessTransport(agent)
@@ -45,7 +45,7 @@ async def test_in_process_transport_direct_call():
 @pytest.mark.asyncio
 async def test_in_process_transport_list_tools():
     """InProcessTransport should delegate list_tools to agent._handle_list_tools."""
-    from celeste_dag.core.agent.transport import InProcessTransport
+    from celeste.core.agent.transport import InProcessTransport
 
     agent = MockAgent()
     transport = InProcessTransport(agent)
@@ -60,7 +60,7 @@ async def test_in_process_transport_list_tools():
 @pytest.mark.asyncio
 async def test_in_process_transport_close_is_noop():
     """InProcessTransport.close() should be a no-op."""
-    from celeste_dag.core.agent.transport import InProcessTransport
+    from celeste.core.agent.transport import InProcessTransport
 
     agent = MockAgent()
     transport = InProcessTransport(agent)
@@ -131,7 +131,7 @@ class FakeProcess:
 @pytest.mark.asyncio
 async def test_stdio_transport_json_rpc():
     """StdioTransport should send JSON-RPC 2.0 requests and correlate responses by id."""
-    from celeste_dag.core.agent.transport_stdio import StdioTransport
+    from celeste.core.agent.transport_stdio import StdioTransport
 
     fake_proc = FakeProcess()
     fake_proc.queue_response({
@@ -161,7 +161,7 @@ async def test_stdio_transport_json_rpc():
 @pytest.mark.asyncio
 async def test_stdio_transport_multiple_requests():
     """StdioTransport should handle multiple sequential requests with incrementing ids."""
-    from celeste_dag.core.agent.transport_stdio import StdioTransport
+    from celeste.core.agent.transport_stdio import StdioTransport
 
     fake_proc = FakeProcess()
     fake_proc.queue_response({"jsonrpc": "2.0", "id": 1, "result": "first"})
@@ -184,7 +184,7 @@ async def test_stdio_transport_multiple_requests():
 @pytest.mark.asyncio
 async def test_stdio_transport_error_response():
     """StdioTransport should raise on JSON-RPC error responses."""
-    from celeste_dag.core.agent.transport_stdio import StdioTransport
+    from celeste.core.agent.transport_stdio import StdioTransport
 
     fake_proc = FakeProcess()
     fake_proc.queue_response({
@@ -202,7 +202,7 @@ async def test_stdio_transport_error_response():
 @pytest.mark.asyncio
 async def test_stdio_transport_close():
     """StdioTransport.close() should close stdin to signal EOF to the subprocess."""
-    from celeste_dag.core.agent.transport_stdio import StdioTransport
+    from celeste.core.agent.transport_stdio import StdioTransport
 
     fake_proc = FakeProcess()
 
@@ -220,7 +220,7 @@ async def test_stdio_transport_close():
 async def test_websocket_transport_roundtrip():
     """WebSocketTransport should send JSON-RPC requests and receive responses."""
     websockets = pytest.importorskip("websockets")
-    from celeste_dag.core.agent.transport_ws import WebSocketTransport, WebSocketServer
+    from celeste.core.agent.transport_ws import WebSocketTransport, WebSocketServer
 
     agent = MockAgent()
     server = WebSocketServer(host="127.0.0.1", port=0, agent=agent)
@@ -245,8 +245,8 @@ async def test_websocket_transport_roundtrip():
 async def test_websocket_transport_auth_failure():
     """WebSocketTransport should raise AuthenticationError when token is rejected."""
     websockets = pytest.importorskip("websockets")
-    from celeste_dag.core.agent.transport_ws import WebSocketTransport, WebSocketServer
-    from celeste_dag.core.exceptions import AuthenticationError
+    from celeste.core.agent.transport_ws import WebSocketTransport, WebSocketServer
+    from celeste.core.exceptions import AuthenticationError
 
     agent = MockAgent()
     server = WebSocketServer(host="127.0.0.1", port=0, agent=agent, auth_token="secret")
@@ -265,7 +265,7 @@ async def test_websocket_transport_auth_failure():
 async def test_websocket_transport_reconnection():
     """WebSocketTransport should auto-reconnect with exponential backoff (max 3 attempts)."""
     websockets = pytest.importorskip("websockets")
-    from celeste_dag.core.agent.transport_ws import WebSocketTransport, WebSocketServer
+    from celeste.core.agent.transport_ws import WebSocketTransport, WebSocketServer
 
     agent = MockAgent()
     server = WebSocketServer(host="127.0.0.1", port=0, agent=agent)
@@ -302,7 +302,7 @@ async def test_websocket_transport_reconnection():
 
 def test_module_exports():
     """The agent module should export all expected symbols."""
-    from celeste_dag.core import agent
+    from celeste.core import agent
 
     assert hasattr(agent, "BaseTransport")
     assert hasattr(agent, "InProcessTransport")

@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from celeste_dag.core.agent.agent import EnvironmentAgent
-from celeste_dag.core.exceptions import (
+from celeste.core.agent.agent import EnvironmentAgent
+from celeste.core.exceptions import (
     AuthenticationError,
     PathTraversalError,
     PlannerTimeoutError,
     SnapshotTimeoutError,
     ToolTimeoutError,
 )
-from celeste_dag.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
+from celeste.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
 
 
 # ===========================================================================
@@ -270,7 +270,7 @@ class TestEnvironmentAgentRegistry:
     @pytest.fixture
     def agent_with_empty_registry(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            from celeste_dag.tools.tool_registry import ToolRegistry
+            from celeste.tools.tool_registry import ToolRegistry
 
             registry = ToolRegistry()
             agent = EnvironmentAgent.in_process(

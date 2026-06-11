@@ -1,5 +1,5 @@
 """
-Tests for the durable execution engine in celeste_dag.core.engine.
+Tests for the durable execution engine in celeste.core.engine.
 
 Follows strict TDD: these tests are written BEFORE the implementation.
 Uses in-memory SQLite and mock workspaces.
@@ -29,10 +29,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import select
 
-from celeste_dag.config.settings import EngineSettings
-from celeste_dag.core.planner import DAGNode, DAGPlan
-from celeste_dag.core.workspaces.base import BaseWorkspace, WorkspaceEvent
-from celeste_dag.database.models import (
+from celeste.config.settings import EngineSettings
+from celeste.core.planner import DAGNode, DAGPlan
+from celeste.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+from celeste.database.models import (
     TaskEvent,
     TaskEventType,
     TaskNode,
@@ -215,7 +215,7 @@ class FailingWorkspace(MockWorkspace):
 @pytest.fixture(autouse=True)
 def _reset_db_module():
     """Reset database module state between tests."""
-    import celeste_dag.database.db as db_mod
+    import celeste.database.db as db_mod
 
     db_mod._engine = None
     db_mod._async_session_factory = None
@@ -263,7 +263,7 @@ class TestEngineCreation:
 
     @pytest.mark.asyncio
     async def test_create_with_settings(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         assert engine._settings is settings
@@ -271,9 +271,9 @@ class TestEngineCreation:
 
     @pytest.mark.asyncio
     async def test_create_with_defaults(self):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
-        with patch("celeste_dag.core.engine.get_settings") as mock_gs:
+        with patch("celeste.core.engine.get_settings") as mock_gs:
             fake_settings = EngineSettings(
                 DATABASE_URL=SQLITE_MEMORY_URL,  # type: ignore[arg-type]
             )
@@ -283,7 +283,7 @@ class TestEngineCreation:
 
     @pytest.mark.asyncio
     async def test_create_with_custom_workspace_factory(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         factory_called = False
 
@@ -308,7 +308,7 @@ class TestEngineLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_initializes_db_and_semaphore(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -316,7 +316,7 @@ class TestEngineLifecycle:
             assert engine._running is True
             assert engine._semaphore is not None
             # Verify DB was initialized by checking the module state
-            import celeste_dag.database.db as db_mod
+            import celeste.database.db as db_mod
 
             assert db_mod._engine is not None
         finally:
@@ -324,7 +324,7 @@ class TestEngineLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_cleans_up(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -333,7 +333,7 @@ class TestEngineLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_idempotent(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -343,7 +343,7 @@ class TestEngineLifecycle:
 
     @pytest.mark.asyncio
     async def test_stop_when_not_started(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         # Stopping a non-started engine should not raise
@@ -360,7 +360,7 @@ class TestWorkflowSubmission:
 
     @pytest.mark.asyncio
     async def test_submit_creates_workflow_record(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -369,7 +369,7 @@ class TestWorkflowSubmission:
             assert isinstance(wf_id, uuid.UUID)
 
             # Verify the Workflow record in DB
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -384,14 +384,14 @@ class TestWorkflowSubmission:
 
     @pytest.mark.asyncio
     async def test_submit_creates_task_nodes(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -407,14 +407,14 @@ class TestWorkflowSubmission:
 
     @pytest.mark.asyncio
     async def test_submit_preserves_dependencies(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -435,14 +435,14 @@ class TestWorkflowSubmission:
 
     @pytest.mark.asyncio
     async def test_submit_preserves_adjacency(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -461,14 +461,14 @@ class TestWorkflowSubmission:
 
     @pytest.mark.asyncio
     async def test_submit_dag_definition_stored(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -490,7 +490,7 @@ class TestReadyNodes:
 
     @pytest.mark.asyncio
     async def test_initial_ready_nodes(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -505,7 +505,7 @@ class TestReadyNodes:
     @pytest.mark.asyncio
     async def test_parallel_ready_nodes(self, settings):
         """After root completes, all 3 branches should be ready simultaneously."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -513,7 +513,7 @@ class TestReadyNodes:
             wf_id = await engine.submit_workflow(PARALLEL_PLAN)
 
             # Mark root as completed
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -534,7 +534,7 @@ class TestReadyNodes:
 
     @pytest.mark.asyncio
     async def test_no_ready_nodes_when_deps_unmet(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -542,7 +542,7 @@ class TestReadyNodes:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
             # Mark step_a as running (not completed)
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -572,14 +572,14 @@ class TestNodeExecution:
 
     @pytest.mark.asyncio
     async def test_execute_node_success(self, settings, mock_workspace):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -614,14 +614,14 @@ class TestNodeExecution:
 
     @pytest.mark.asyncio
     async def test_execute_node_failure(self, settings, failing_workspace):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -658,7 +658,7 @@ class TestNodeExecution:
 
     @pytest.mark.asyncio
     async def test_execute_node_captures_output(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         ws = MockWorkspace(
             events=[
@@ -674,7 +674,7 @@ class TestNodeExecution:
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -709,7 +709,7 @@ class TestRunWorkflow:
 
     @pytest.mark.asyncio
     async def test_run_linear_workflow(self, settings, mock_workspace):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -717,7 +717,7 @@ class TestRunWorkflow:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -737,7 +737,7 @@ class TestRunWorkflow:
 
     @pytest.mark.asyncio
     async def test_run_parallel_workflow(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         ws = MockWorkspace()
         engine = Engine(
@@ -749,7 +749,7 @@ class TestRunWorkflow:
             wf_id = await engine.submit_workflow(PARALLEL_PLAN)
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -771,7 +771,7 @@ class TestStateCheckpointing:
 
     @pytest.mark.asyncio
     async def test_events_recorded_for_each_node(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
@@ -779,7 +779,7 @@ class TestStateCheckpointing:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -800,7 +800,7 @@ class TestStateCheckpointing:
 
     @pytest.mark.asyncio
     async def test_events_have_timestamps(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
@@ -808,7 +808,7 @@ class TestStateCheckpointing:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -867,7 +867,7 @@ class TestConcurrencyLimiting:
                 for event in self._events:
                     yield event
 
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(
             settings=settings,
@@ -921,7 +921,7 @@ class TestConcurrencyLimiting:
                 for event in self._events:
                     yield event
 
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(
             settings=settings,
@@ -949,14 +949,14 @@ class TestDurableStateReplay:
     @pytest.mark.asyncio
     async def test_replay_resumes_partial_workflow(self, settings):
         """Simulate a crash after step_a completes, then replay resumes from step_b."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             # Simulate: step_a completed, step_b was running when crash happened
             async with get_session() as session:
@@ -1023,14 +1023,14 @@ class TestDurableStateReplay:
     @pytest.mark.asyncio
     async def test_replay_does_not_reexecute_completed(self, settings):
         """Completed nodes are not re-executed after replay."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             # Mark step_a and step_b as completed
             async with get_session() as session:
@@ -1077,7 +1077,7 @@ class TestDurableStateReplay:
     @pytest.mark.asyncio
     async def test_replay_no_running_workflows(self, settings):
         """Replay is a no-op when there are no running workflows."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
@@ -1108,7 +1108,7 @@ class TestDurableStateReplay:
                 WORKSPACE_ENGINE="local_tmp",
             )
 
-            from celeste_dag.core.engine import Engine
+            from celeste.core.engine import Engine
 
             # Phase 1: Execute partially
             engine1 = Engine(
@@ -1119,7 +1119,7 @@ class TestDurableStateReplay:
             wf_id = await engine1.submit_workflow(PARALLEL_PLAN)
 
             # Manually mark root as completed, branches as running (simulating crash)
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -1201,7 +1201,7 @@ class TestSagaCompensation:
     async def test_compensation_on_failure(self, settings):
         """When step_c fails, step_a and step_b (if they had compensation)
         should have COMPENSATION_TRIGGERED events."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         # Plan where step_c fails and has compensation
         plan = DAGPlan(
@@ -1246,7 +1246,7 @@ class TestSagaCompensation:
             wf_id = await engine.submit_workflow(plan)
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 # Workflow should be failed
@@ -1272,7 +1272,7 @@ class TestSagaCompensation:
     @pytest.mark.asyncio
     async def test_compensation_commands_are_executed(self, settings):
         """Compensation commands are actually executed in workspaces, not just logged."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         # Track which compensation commands get executed
         executed_compensations: list[str] = []
@@ -1332,7 +1332,7 @@ class TestSagaCompensation:
             wf_id = await engine.submit_workflow(plan)
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             # Verify compensation commands were actually executed
             # Should contain: do_a, do_b, fail_here, undo_b, undo_a (reverse order)
@@ -1359,7 +1359,7 @@ class TestSagaCompensation:
     @pytest.mark.asyncio
     async def test_compensation_failure_is_best_effort(self, settings):
         """If a compensation command fails, other compensations still proceed."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         executed_compensations: list[str] = []
 
@@ -1421,7 +1421,7 @@ class TestSagaCompensation:
             # Should not raise despite compensation failure
             await engine.run_workflow(wf_id)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             # Both compensations should have been attempted
             assert "undo_b" in executed_compensations
@@ -1467,7 +1467,7 @@ class TestEventQueue:
 
     @pytest.mark.asyncio
     async def test_event_queue_exists(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -1479,7 +1479,7 @@ class TestEventQueue:
 
     @pytest.mark.asyncio
     async def test_events_emitted_to_queue(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
@@ -1503,7 +1503,7 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_submit_before_start_raises(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         with pytest.raises(RuntimeError, match="not started"):
@@ -1511,7 +1511,7 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_run_workflow_before_start_raises(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         with pytest.raises(RuntimeError, match="not started"):
@@ -1519,7 +1519,7 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_run_nonexistent_workflow_raises(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -1532,7 +1532,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_graceful_stop_with_active_tasks(self, settings):
         """Engine stops cleanly even with tasks in progress."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         # Use a workspace with a delay so tasks are in-flight during stop
         engine = Engine(
@@ -1564,12 +1564,12 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_workspace_factory_default(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         ws = engine._default_workspace_factory()
         # Default workspace engine is local_tmp
-        from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         assert isinstance(ws, LocalTmpWorkspace)
 
@@ -1585,14 +1585,14 @@ class TestDeadlockDetection:
     @pytest.mark.asyncio
     async def test_deadlock_timeout_raises(self, settings):
         """If no nodes become ready for too long, RuntimeError is raised."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
         try:
             wf_id = await engine.submit_workflow(SAMPLE_PLAN)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             # Sabotage: set all nodes to RUNNING so none are pending or terminal
             async with get_session() as session:
@@ -1666,7 +1666,7 @@ class TestStopReset:
 
     @pytest.mark.asyncio
     async def test_stop_resets_semaphore(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings)
         await engine.start()
@@ -1676,7 +1676,7 @@ class TestStopReset:
 
     @pytest.mark.asyncio
     async def test_stop_resets_event_queue(self, settings):
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
@@ -1694,7 +1694,7 @@ class TestStopReset:
     @pytest.mark.asyncio
     async def test_restart_after_stop(self, settings):
         """Engine can be started again after stop with fresh state."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
         await engine.start()
@@ -1713,7 +1713,7 @@ class TestStopReset:
             wf_id2 = await engine.submit_workflow(SAMPLE_PLAN)
             await engine.run_workflow(wf_id2)
 
-            from celeste_dag.database.db import get_session
+            from celeste.database.db import get_session
 
             async with get_session() as session:
                 result = await session.execute(
@@ -1745,10 +1745,10 @@ class TestOPALoopIntegration:
     @pytest.mark.asyncio
     async def test_engine_run_opa_loop_integration(self, settings):
         """Engine.run() uses OPA loop with mocked planner and evaluator."""
-        from celeste_dag.core.engine import Engine
-        from celeste_dag.core.opa_loop import WorkflowResult
-        from celeste_dag.core.planner import DAGFragment
-        from celeste_dag.core.evaluator import EvaluatorDecision
+        from celeste.core.engine import Engine
+        from celeste.core.opa_loop import WorkflowResult
+        from celeste.core.planner import DAGFragment
+        from celeste.core.evaluator import EvaluatorDecision
 
         # Mock agent
         mock_agent = MagicMock()
@@ -1794,7 +1794,7 @@ class TestOPALoopIntegration:
     @pytest.mark.asyncio
     async def test_engine_run_without_agent_raises(self, settings):
         """Engine.run() raises if agent is not provided."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         engine = Engine(
             settings=settings,
@@ -1810,7 +1810,7 @@ class TestOPALoopIntegration:
     @pytest.mark.asyncio
     async def test_engine_run_without_planner_raises(self, settings):
         """Engine.run() raises if planner is not provided."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         mock_agent = MagicMock()
         engine = Engine(
@@ -1827,7 +1827,7 @@ class TestOPALoopIntegration:
     @pytest.mark.asyncio
     async def test_engine_run_without_evaluator_raises(self, settings):
         """Engine.run() raises if evaluator is not provided."""
-        from celeste_dag.core.engine import Engine
+        from celeste.core.engine import Engine
 
         mock_agent = MagicMock()
         mock_planner = MagicMock()
@@ -1845,10 +1845,10 @@ class TestOPALoopIntegration:
     @pytest.mark.asyncio
     async def test_engine_run_max_cycles_override(self, settings):
         """Engine.run() max_cycles parameter overrides settings."""
-        from celeste_dag.core.engine import Engine
-        from celeste_dag.core.opa_loop import WorkflowResult
-        from celeste_dag.core.planner import DAGFragment
-        from celeste_dag.core.evaluator import EvaluatorDecision
+        from celeste.core.engine import Engine
+        from celeste.core.opa_loop import WorkflowResult
+        from celeste.core.planner import DAGFragment
+        from celeste.core.evaluator import EvaluatorDecision
 
         mock_agent = MagicMock()
         mock_agent.call_tool = AsyncMock(return_value={"files": {}})

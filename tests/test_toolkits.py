@@ -16,7 +16,7 @@ from abc import ABC
 
 import pytest
 
-from celeste_dag.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
+from celeste.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
 
 
 # ===========================================================================
@@ -348,7 +348,7 @@ class TestSystemDataToolkit:
 
     @pytest.fixture()
     def toolkit(self):
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
 
         return SystemDataToolkit()
 
@@ -466,7 +466,7 @@ class TestWebScrapingToolkit:
 
     @pytest.fixture()
     def toolkit(self):
-        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+        from celeste.toolkits.web_scraping import WebScrapingToolkit
 
         return WebScrapingToolkit()
 
@@ -552,7 +552,7 @@ class TestCodingVerticalToolkit:
 
     @pytest.fixture()
     def toolkit(self):
-        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
+        from celeste.toolkits.coding_vertical import CodingVerticalToolkit
 
         return CodingVerticalToolkit()
 
@@ -664,7 +664,7 @@ class TestSystemDataToolkitExecute:
 
     @pytest.fixture()
     def toolkit(self):
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
 
         return SystemDataToolkit()
 
@@ -737,7 +737,7 @@ class TestWebScrapingToolkitExecute:
 
     @pytest.fixture()
     def toolkit(self):
-        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+        from celeste.toolkits.web_scraping import WebScrapingToolkit
 
         return WebScrapingToolkit()
 
@@ -775,7 +775,7 @@ class TestCodingVerticalToolkitExecute:
 
     @pytest.fixture()
     def toolkit(self):
-        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
+        from celeste.toolkits.coding_vertical import CodingVerticalToolkit
 
         return CodingVerticalToolkit()
 
@@ -800,18 +800,18 @@ class TestCrossToolkitIntegration:
     """Cross-cutting concerns across all toolkits."""
 
     def test_all_toolkit_names_are_unique(self):
-        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
-        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+        from celeste.toolkits.coding_vertical import CodingVerticalToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.web_scraping import WebScrapingToolkit
 
         toolkits = [SystemDataToolkit(), WebScrapingToolkit(), CodingVerticalToolkit()]
         names = [tk.name for tk in toolkits]
         assert len(names) == len(set(names))
 
     def test_all_toolkits_subclass_base(self):
-        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
-        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+        from celeste.toolkits.coding_vertical import CodingVerticalToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.web_scraping import WebScrapingToolkit
 
         assert issubclass(SystemDataToolkit, BaseToolkit)
         assert issubclass(WebScrapingToolkit, BaseToolkit)
@@ -819,9 +819,9 @@ class TestCrossToolkitIntegration:
 
     def test_all_tool_names_are_unique_across_toolkits(self):
         """No two toolkits should register a tool with the same name."""
-        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
-        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+        from celeste.toolkits.coding_vertical import CodingVerticalToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.web_scraping import WebScrapingToolkit
 
         all_names = []
         for TK in [SystemDataToolkit, WebScrapingToolkit, CodingVerticalToolkit]:
@@ -831,9 +831,9 @@ class TestCrossToolkitIntegration:
 
     def test_all_mcp_schemas_across_toolkits(self):
         """Every MCP schema across all toolkits is valid."""
-        from celeste_dag.toolkits.coding_vertical import CodingVerticalToolkit
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
-        from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+        from celeste.toolkits.coding_vertical import CodingVerticalToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.web_scraping import WebScrapingToolkit
 
         for TK in [SystemDataToolkit, WebScrapingToolkit, CodingVerticalToolkit]:
             tk = TK()

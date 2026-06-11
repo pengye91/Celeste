@@ -26,8 +26,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from celeste_dag.core.llm.base import BaseLLMClient, LLMMessage, LLMResponse
-from celeste_dag.toolkits.base import (
+from celeste.core.llm.base import BaseLLMClient, LLMMessage, LLMResponse
+from celeste.toolkits.base import (
     BaseToolkit,
     ToolDefinition,
     ToolParameter,
@@ -143,7 +143,7 @@ class TestDAGNode:
     """Tests for the DAGNode Pydantic model."""
 
     def test_create_minimal(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="step_1", task_type="llm_call", command="summarize")
         assert node.name == "step_1"
@@ -155,7 +155,7 @@ class TestDAGNode:
         assert node.compensation_arguments is None
 
     def test_create_full(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(
             name="write_file",
@@ -175,7 +175,7 @@ class TestDAGNode:
         assert node.compensation_arguments == {"path": "/tmp/out.txt"}
 
     def test_all_valid_task_types(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         valid_types = ["llm_call", "tool_execution", "fan_out", "map_reduce", "condition"]
         for t in valid_types:
@@ -183,32 +183,32 @@ class TestDAGNode:
             assert node.task_type == t
 
     def test_invalid_task_type_rejected(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         with pytest.raises(Exception):
             DAGNode(name="n", task_type="invalid_type", command="cmd")  # type: ignore[arg-type]
 
     def test_arguments_default_empty_dict(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="n", task_type="llm_call", command="c")
         assert node.arguments == {}
 
     def test_dependencies_default_empty_list(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="n", task_type="llm_call", command="c")
         assert node.dependencies == []
 
     def test_compensation_fields_optional(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="n", task_type="llm_call", command="c")
         assert node.compensation_command is None
         assert node.compensation_arguments is None
 
     def test_multiple_dependencies(self):
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(
             name="merge",
@@ -220,7 +220,7 @@ class TestDAGNode:
 
     def test_model_dump(self):
         """Ensure Pydantic model_dump produces a serialisable dict."""
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="n", task_type="llm_call", command="c")
         d = node.model_dump()
@@ -231,7 +231,7 @@ class TestDAGNode:
 
     def test_dag_node_merged_model(self):
         """DAGNode has optional task_id, preconditions, postconditions fields."""
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(
             name="step_1",
@@ -248,14 +248,14 @@ class TestDAGNode:
 
     def test_dag_node_task_id_defaults_to_name(self):
         """When task_id is not provided, it defaults to name."""
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="step_1", task_type="llm_call", command="summarize")
         assert node.task_id == "step_1"
 
     def test_dag_node_preconditions_postconditions_default_none(self):
         """When preconditions/postconditions are not provided, they default to None."""
-        from celeste_dag.core.planner import DAGNode
+        from celeste.core.planner import DAGNode
 
         node = DAGNode(name="step_1", task_type="llm_call", command="summarize")
         assert node.preconditions is None
@@ -271,7 +271,7 @@ class TestDAGPlan:
     """Tests for the DAGPlan Pydantic model."""
 
     def test_create_minimal(self):
-        from celeste_dag.core.planner import DAGPlan
+        from celeste.core.planner import DAGPlan
 
         plan = DAGPlan(name="my_plan", nodes=[])
         assert plan.name == "my_plan"
@@ -280,7 +280,7 @@ class TestDAGPlan:
         assert plan.variables == {}
 
     def test_create_full(self):
-        from celeste_dag.core.planner import DAGNode, DAGPlan
+        from celeste.core.planner import DAGNode, DAGPlan
 
         nodes = [
             DAGNode(name="step_1", task_type="llm_call", command="analyze"),
@@ -303,19 +303,19 @@ class TestDAGPlan:
         assert plan.variables == {"target": "sales_data"}
 
     def test_description_default_empty(self):
-        from celeste_dag.core.planner import DAGPlan
+        from celeste.core.planner import DAGPlan
 
         plan = DAGPlan(name="p", nodes=[])
         assert plan.description == ""
 
     def test_variables_default_empty_dict(self):
-        from celeste_dag.core.planner import DAGPlan
+        from celeste.core.planner import DAGPlan
 
         plan = DAGPlan(name="p", nodes=[])
         assert plan.variables == {}
 
     def test_model_dump_roundtrip(self):
-        from celeste_dag.core.planner import DAGNode, DAGPlan
+        from celeste.core.planner import DAGNode, DAGPlan
 
         nodes = [DAGNode(name="s1", task_type="llm_call", command="c")]
         plan = DAGPlan(name="p", nodes=nodes, variables={"k": "v"})
@@ -326,7 +326,7 @@ class TestDAGPlan:
         assert len(plan2.nodes) == 1
 
     def test_single_node_plan(self):
-        from celeste_dag.core.planner import DAGNode, DAGPlan
+        from celeste.core.planner import DAGNode, DAGPlan
 
         node = DAGNode(name="only", task_type="llm_call", command="echo")
         plan = DAGPlan(name="single", nodes=[node])
@@ -343,7 +343,7 @@ class TestPlanner:
     """Tests for the Planner class."""
 
     def test_init_with_client_only(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client)
@@ -351,7 +351,7 @@ class TestPlanner:
         assert planner._toolkits == []
 
     def test_init_with_toolkits(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         tk1 = _StubToolkit()
@@ -360,14 +360,14 @@ class TestPlanner:
         assert len(planner._toolkits) == 2
 
     def test_get_available_tools_no_toolkits(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client)
         assert planner.get_available_tools() == []
 
     def test_get_available_tools_with_toolkits(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         tk = _StubToolkit()
@@ -377,7 +377,7 @@ class TestPlanner:
         assert tools[0]["name"] == "stub_tool"
 
     def test_get_available_tools_multiple_toolkits(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         tk1 = _StubToolkit(
@@ -401,7 +401,7 @@ class TestPlanner:
         assert tools[1]["name"] == "t2"
 
     def test_get_available_tools_returns_mcp_schema_format(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client, toolkits=[_StubToolkit()])
@@ -412,7 +412,7 @@ class TestPlanner:
             assert "inputSchema" in schema
 
     def test_register_toolkit(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client)
@@ -421,7 +421,7 @@ class TestPlanner:
         assert len(planner.get_available_tools()) == 1
 
     def test_register_toolkit_appends(self):
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client, toolkits=[_StubToolkit()])
@@ -432,7 +432,7 @@ class TestPlanner:
     @pytest.mark.asyncio()
     async def test_plan_calls_structured_output(self):
         """Planner.plan_full_dag() must call the LLM's structured_output with DAGPlan model."""
-        from celeste_dag.core.planner import DAGNode, DAGPlan, Planner
+        from celeste.core.planner import DAGNode, DAGPlan, Planner
 
         client = _StubLLMClient()
         expected_plan = DAGPlan(
@@ -456,7 +456,7 @@ class TestPlanner:
 
     @pytest.mark.asyncio()
     async def test_plan_returns_dag_plan(self):
-        from celeste_dag.core.planner import DAGNode, DAGPlan, Planner
+        from celeste.core.planner import DAGNode, DAGPlan, Planner
 
         client = _StubLLMClient()
         expected = DAGPlan(
@@ -473,7 +473,7 @@ class TestPlanner:
     @pytest.mark.asyncio()
     async def test_plan_passes_context_to_llm(self):
         """If context is provided, it should be reflected in the messages."""
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client)
@@ -488,7 +488,7 @@ class TestPlanner:
     @pytest.mark.asyncio()
     async def test_plan_includes_tools_in_system_prompt(self):
         """When toolkits are registered, the system prompt should reference them."""
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client, toolkits=[_StubToolkit()])
@@ -502,7 +502,7 @@ class TestPlanner:
     @pytest.mark.asyncio()
     async def test_plan_uses_low_temperature(self):
         """Plan generation should use temperature=0 for deterministic output."""
-        from celeste_dag.core.planner import Planner
+        from celeste.core.planner import Planner
 
         client = _StubLLMClient()
         planner = Planner(client)
@@ -514,7 +514,7 @@ class TestPlanner:
     @pytest.mark.asyncio()
     async def test_plan_full_dag_backward_compatible(self):
         """plan_full_dag() should still work with the old signature."""
-        from celeste_dag.core.planner import DAGNode, DAGPlan, Planner
+        from celeste.core.planner import DAGNode, DAGPlan, Planner
 
         client = _StubLLMClient()
         expected_plan = DAGPlan(
@@ -591,7 +591,7 @@ class _StubLLMClientFragment(BaseLLMClient):
         )
         if self._structured_side_effect is not None:
             return self._structured_side_effect
-        from celeste_dag.core.planner import DAGFragment
+        from celeste.core.planner import DAGFragment
 
         return DAGFragment.model_construct(nodes=[], reasoning="test")
 
@@ -605,7 +605,7 @@ class TestPlannerOPALoop:
     @pytest.mark.asyncio()
     async def test_planner_accepts_observation_context(self):
         """plan() accepts goal, observation, tool_schemas, and history."""
-        from celeste_dag.core.planner import DAGFragment, Planner
+        from celeste.core.planner import DAGFragment, Planner
 
         client = _StubLLMClientFragment()
         planner = Planner(client)
@@ -634,7 +634,7 @@ class TestPlannerOPALoop:
     @pytest.mark.asyncio()
     async def test_planner_returns_dag_fragment(self):
         """plan() returns a DAGFragment with nodes, reasoning, etc."""
-        from celeste_dag.core.planner import DAGFragment, DAGNode, Planner
+        from celeste.core.planner import DAGFragment, DAGNode, Planner
 
         client = _StubLLMClientFragment()
         expected = DAGFragment(
@@ -667,8 +667,8 @@ class TestPlannerOPALoop:
         """plan() wraps LLM call in asyncio.wait_for and raises PlannerTimeoutError."""
         import asyncio
 
-        from celeste_dag.core.exceptions import PlannerTimeoutError
-        from celeste_dag.core.planner import Planner
+        from celeste.core.exceptions import PlannerTimeoutError
+        from celeste.core.planner import Planner
 
         class _SlowLLMClient(BaseLLMClient):
             async def complete(self, messages, **kwargs):
@@ -691,7 +691,7 @@ class TestPlannerOPALoop:
     @pytest.mark.asyncio()
     async def test_planner_timeout_ms_default(self):
         """plan() should work with default timeout_ms."""
-        from celeste_dag.core.planner import DAGFragment, Planner
+        from celeste.core.planner import DAGFragment, Planner
 
         client = _StubLLMClientFragment()
         planner = Planner(client)
@@ -700,7 +700,7 @@ class TestPlannerOPALoop:
 
     def test_dag_fragment_model(self):
         """DAGFragment model has the expected fields and defaults."""
-        from celeste_dag.core.planner import DAGFragment, DAGNode
+        from celeste.core.planner import DAGFragment, DAGNode
 
         fragment = DAGFragment(
             nodes=[DAGNode(name="n", task_type="llm_call", command="c")],
@@ -715,7 +715,7 @@ class TestPlannerOPALoop:
 
     def test_dag_fragment_defaults(self):
         """DAGFragment defaults for optional fields."""
-        from celeste_dag.core.planner import DAGFragment
+        from celeste.core.planner import DAGFragment
 
         fragment = DAGFragment(nodes=[], reasoning="done")
         assert fragment.estimated_remaining is None
@@ -731,7 +731,7 @@ class TestFanOutSpec:
     """Tests for the FanOutSpec model."""
 
     def test_create_fan_out_spec(self):
-        from celeste_dag.core.planner import DAGNode, FanOutSpec
+        from celeste.core.planner import DAGNode, FanOutSpec
 
         template = DAGNode(name="process", task_type="tool_execution", command="process_item")
         spec = FanOutSpec(
@@ -744,7 +744,7 @@ class TestFanOutSpec:
         assert spec.max_parallel == 5
 
     def test_fan_out_spec_default_max_parallel(self):
-        from celeste_dag.core.planner import DAGNode, FanOutSpec
+        from celeste.core.planner import DAGNode, FanOutSpec
 
         template = DAGNode(name="t", task_type="llm_call", command="c")
         spec = FanOutSpec(source_node="src", template_node=template)
@@ -755,7 +755,7 @@ class TestGenerateFanOutNodes:
     """Tests for generate_fan_out_nodes()."""
 
     def test_basic_fan_out(self):
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(
             name="process_item",
@@ -773,7 +773,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_dependencies(self):
         """Each fan-out node must depend on the parent."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="w", task_type="tool_execution", command="work")
         nodes = generate_fan_out_nodes("parent", [1, 2], template)
@@ -782,7 +782,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_argument_injection(self):
         """Each node should have the current array element injected into arguments."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(
             name="proc",
@@ -798,21 +798,21 @@ class TestGenerateFanOutNodes:
         assert nodes[1].arguments.get("item") == "y"
 
     def test_fan_out_preserves_template_command(self):
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="tool_execution", command="my_command")
         nodes = generate_fan_out_nodes("s", [1], template)
         assert nodes[0].command == "my_command"
 
     def test_fan_out_preserves_task_type(self):
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="tool_execution", command="c")
         nodes = generate_fan_out_nodes("s", [1], template)
         assert nodes[0].task_type == "tool_execution"
 
     def test_fan_out_inherits_compensation(self):
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(
             name="p",
@@ -827,14 +827,14 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_empty_input(self):
         """Empty array produces no nodes."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="llm_call", command="c")
         nodes = generate_fan_out_nodes("s", [], template)
         assert nodes == []
 
     def test_fan_out_single_item(self):
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="llm_call", command="c")
         nodes = generate_fan_out_nodes("s", [42], template)
@@ -843,7 +843,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_max_parallel_limits_output(self):
         """When input exceeds max_parallel, output is capped."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="llm_call", command="c")
         items = list(range(100))
@@ -852,7 +852,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_max_parallel_exact(self):
         """When input equals max_parallel, all items are included."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="llm_call", command="c")
         nodes = generate_fan_out_nodes("s", [1, 2, 3], template, max_parallel=3)
@@ -860,7 +860,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_default_max_parallel(self):
         """Default max_parallel is 10."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="p", task_type="llm_call", command="c")
         items = list(range(20))
@@ -869,7 +869,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_unique_names(self):
         """Each generated node must have a unique name."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(name="w", task_type="llm_call", command="c")
         nodes = generate_fan_out_nodes("s", list(range(10)), template)
@@ -878,7 +878,7 @@ class TestGenerateFanOutNodes:
 
     def test_fan_out_dict_items(self):
         """Fan-out should work with dict items as well as primitives."""
-        from celeste_dag.core.planner import DAGNode, generate_fan_out_nodes
+        from celeste.core.planner import DAGNode, generate_fan_out_nodes
 
         template = DAGNode(
             name="proc",
@@ -902,7 +902,7 @@ class TestSagaStep:
     """Tests for the SagaStep model."""
 
     def test_create_saga_step(self):
-        from celeste_dag.core.planner import SagaStep
+        from celeste.core.planner import SagaStep
 
         step = SagaStep(
             node_name="write_db",
@@ -917,7 +917,7 @@ class TestSagaStep:
         assert step.completed is False
 
     def test_saga_step_default_completed_false(self):
-        from celeste_dag.core.planner import SagaStep
+        from celeste.core.planner import SagaStep
 
         step = SagaStep(
             node_name="n", action="a", compensation="c"
@@ -925,13 +925,13 @@ class TestSagaStep:
         assert step.completed is False
 
     def test_saga_step_default_compensation_arguments_empty(self):
-        from celeste_dag.core.planner import SagaStep
+        from celeste.core.planner import SagaStep
 
         step = SagaStep(node_name="n", action="a", compensation="c")
         assert step.compensation_arguments == {}
 
     def test_saga_step_completed_true(self):
-        from celeste_dag.core.planner import SagaStep
+        from celeste.core.planner import SagaStep
 
         step = SagaStep(
             node_name="n", action="a", compensation="c", completed=True
@@ -943,7 +943,7 @@ class TestSagaPlan:
     """Tests for the SagaPlan model and get_compensations()."""
 
     def _make_steps(self):
-        from celeste_dag.core.planner import SagaStep
+        from celeste.core.planner import SagaStep
 
         return [
             SagaStep(
@@ -967,7 +967,7 @@ class TestSagaPlan:
         ]
 
     def test_create_saga_plan(self):
-        from celeste_dag.core.planner import SagaPlan
+        from celeste.core.planner import SagaPlan
 
         plan = SagaPlan(workflow_name="signup", steps=self._make_steps())
         assert plan.workflow_name == "signup"
@@ -975,7 +975,7 @@ class TestSagaPlan:
 
     def test_get_compensations_returns_reversed_completed(self):
         """Compensations are for completed steps before the failure, in reverse."""
-        from celeste_dag.core.planner import SagaPlan
+        from celeste.core.planner import SagaPlan
 
         plan = SagaPlan(workflow_name="signup", steps=self._make_steps())
         # Failure at index 2 (step_3)
@@ -987,7 +987,7 @@ class TestSagaPlan:
 
     def test_get_compensations_failure_at_first_step(self):
         """No compensations if the first step fails."""
-        from celeste_dag.core.planner import SagaPlan
+        from celeste.core.planner import SagaPlan
 
         plan = SagaPlan(workflow_name="test", steps=self._make_steps())
         compensations = plan.get_compensations(failed_step_index=0)
@@ -995,7 +995,7 @@ class TestSagaPlan:
 
     def test_get_compensations_failure_at_second_step(self):
         """Only step_1 is compensated if step_2 fails."""
-        from celeste_dag.core.planner import SagaPlan
+        from celeste.core.planner import SagaPlan
 
         plan = SagaPlan(workflow_name="test", steps=self._make_steps())
         compensations = plan.get_compensations(failed_step_index=1)
@@ -1004,7 +1004,7 @@ class TestSagaPlan:
 
     def test_get_compensations_skips_uncompleted_steps(self):
         """Only completed steps before failure should be compensated."""
-        from celeste_dag.core.planner import SagaPlan, SagaStep
+        from celeste.core.planner import SagaPlan, SagaStep
 
         steps = [
             SagaStep(node_name="s1", action="a", compensation="c", completed=True),
@@ -1020,7 +1020,7 @@ class TestSagaPlan:
         assert compensations[1].node_name == "s1"
 
     def test_get_compensations_all_completed_before_failure(self):
-        from celeste_dag.core.planner import SagaPlan, SagaStep
+        from celeste.core.planner import SagaPlan, SagaStep
 
         steps = [
             SagaStep(node_name="a", action="a", compensation="ca", completed=True),
@@ -1039,7 +1039,7 @@ class TestExtractSagaPlan:
     """Tests for extract_saga_plan() function."""
 
     def test_extract_from_dag_plan(self):
-        from celeste_dag.core.planner import (
+        from celeste.core.planner import (
             DAGNode,
             DAGPlan,
             extract_saga_plan,
@@ -1073,7 +1073,7 @@ class TestExtractSagaPlan:
         assert len(saga.steps) == 3
 
     def test_extract_saga_step_fields(self):
-        from celeste_dag.core.planner import (
+        from celeste.core.planner import (
             DAGNode,
             DAGPlan,
             extract_saga_plan,
@@ -1101,7 +1101,7 @@ class TestExtractSagaPlan:
 
     def test_extract_saga_no_compensation(self):
         """Nodes without compensation_command get empty compensation string."""
-        from celeste_dag.core.planner import (
+        from celeste.core.planner import (
             DAGNode,
             DAGPlan,
             extract_saga_plan,
@@ -1118,7 +1118,7 @@ class TestExtractSagaPlan:
         assert step.compensation == ""
 
     def test_extract_saga_empty_plan(self):
-        from celeste_dag.core.planner import DAGPlan, extract_saga_plan
+        from celeste.core.planner import DAGPlan, extract_saga_plan
 
         plan = DAGPlan(name="empty", nodes=[])
         saga = extract_saga_plan(plan)
@@ -1127,7 +1127,7 @@ class TestExtractSagaPlan:
 
     def test_extract_saga_preserves_order(self):
         """Steps should be in the same order as DAG nodes."""
-        from celeste_dag.core.planner import (
+        from celeste.core.planner import (
             DAGNode,
             DAGPlan,
             extract_saga_plan,
@@ -1146,7 +1146,7 @@ class TestExtractSagaPlan:
 
     def test_extract_saga_default_compensation_arguments(self):
         """When compensation_command exists but no compensation_arguments."""
-        from celeste_dag.core.planner import (
+        from celeste.core.planner import (
             DAGNode,
             DAGPlan,
             extract_saga_plan,

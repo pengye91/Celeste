@@ -47,8 +47,8 @@ Celeste-DAG compiles natural-language goals into executable DAGs, runs them insi
 
 ```python
 import asyncio
-from celeste_dag import Engine, EnvironmentAgent
-from celeste_dag.toolkits.system_data import SystemDataToolkit
+from celeste import Engine, EnvironmentAgent
+from celeste.toolkits.system_data import SystemDataToolkit
 
 async def main():
     agent = EnvironmentAgent.in_process(
@@ -123,9 +123,9 @@ pip install -e .
 Run everything in a single process with direct Python calls — zero network overhead.
 
 ```python
-from celeste_dag import Engine, EnvironmentAgent
-from celeste_dag.toolkits.system_data import SystemDataToolkit
-from celeste_dag.toolkits.web_scraping import WebScrapingToolkit
+from celeste import Engine, EnvironmentAgent
+from celeste.toolkits.system_data import SystemDataToolkit
+from celeste.toolkits.web_scraping import WebScrapingToolkit
 
 agent = EnvironmentAgent.in_process(
     workdir="/workspace",
@@ -142,7 +142,7 @@ Connect to an agent running on a remote machine via persistent WebSocket.
 
 ```python
 # On the target machine (agent)
-from celeste_dag import EnvironmentAgent
+from celeste import EnvironmentAgent
 
 agent = EnvironmentAgent.serve(
     host="0.0.0.0",
@@ -156,7 +156,7 @@ await agent.start()
 
 ```python
 # On the orchestrator (engine)
-from celeste_dag import Engine, EnvironmentAgent
+from celeste import Engine, EnvironmentAgent
 
 agent = EnvironmentAgent.remote(
     url="ws://worker-3.internal:8080",
@@ -173,7 +173,7 @@ Use Celeste-DAG as a library inside your own application.
 
 ```python
 from fastapi import FastAPI
-from celeste_dag import Engine, EnvironmentAgent
+from celeste import Engine, EnvironmentAgent
 
 app = FastAPI()
 engine = Engine(agent=EnvironmentAgent.in_process(workdir="/app/workspace"))
@@ -218,7 +218,7 @@ result = await engine.run(
 
 ```
 Celeste/
-├── src/celeste_dag/
+├── src/celeste/
 │   ├── core/
 │   │   ├── agent/              # Environment Agent Protocol
 │   │   │   ├── agent.py        # EnvironmentAgent (in-process / remote / serve)
@@ -282,7 +282,7 @@ pytest tests/test_opa_loop.py -v
 pytest tests/test_remote_e2e.py -v
 
 # Run with coverage
-pytest --cov=src/celeste_dag --cov-report=html
+pytest --cov=src/celeste --cov-report=html
 ```
 
 **Current status:** 693 tests passing, 0 failures.

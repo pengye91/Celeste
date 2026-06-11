@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from celeste_dag.config.settings import EngineSettings, get_settings, reset_settings
+from celeste.config.settings import EngineSettings, get_settings, reset_settings
 
 
 # ---------------------------------------------------------------------------
@@ -375,13 +375,13 @@ class TestReexports:
     """Public API must be re-exported from config/__init__.py."""
 
     def test_engine_settings_reexported(self) -> None:
-        from celeste_dag.config import EngineSettings as ES
+        from celeste.config import EngineSettings as ES
         assert ES is EngineSettings
 
     def test_get_settings_reexported(self) -> None:
-        from celeste_dag.config import get_settings as gs
+        from celeste.config import get_settings as gs
         assert gs is get_settings
 
     def test_reset_settings_reexported(self) -> None:
-        from celeste_dag.config import reset_settings as rs
+        from celeste.config import reset_settings as rs
         assert rs is reset_settings

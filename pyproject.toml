@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "celeste-dag"
+name = "celeste"
 version = "0.1.0"
 description = "General-Purpose Dynamic Agentic Workflow Engine"
 readme = "README.md"
@@ -47,7 +47,7 @@ pg = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/celeste_dag"]
+packages = ["src/celeste"]
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""

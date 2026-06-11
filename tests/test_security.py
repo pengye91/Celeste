@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from celeste_dag.core.llm.base import BaseLLMClient, LLMMessage, LLMResponse
-from celeste_dag.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
+from celeste.core.llm.base import BaseLLMClient, LLMMessage, LLMResponse
+from celeste.toolkits.base import BaseToolkit, ToolDefinition, ToolParameter
 
 
 # ===========================================================================
@@ -116,7 +116,7 @@ class TestSecurityVerdict:
     """Test SecurityVerdict Pydantic model validation."""
 
     def test_create_safe_verdict(self) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         v = SecurityVerdict(is_safe=True, risk_level="safe", reason="Command is benign")
         assert v.is_safe is True
         assert v.risk_level == "safe"
@@ -124,7 +124,7 @@ class TestSecurityVerdict:
         assert v.detected_threats == []
 
     def test_create_unsafe_verdict_with_threats(self) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         v = SecurityVerdict(
             is_safe=False,
             risk_level="critical",
@@ -136,23 +136,23 @@ class TestSecurityVerdict:
         assert len(v.detected_threats) == 2
 
     def test_invalid_risk_level_raises(self) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         with pytest.raises(ValidationError):
             SecurityVerdict(is_safe=True, risk_level="extreme", reason="test")
 
     def test_risk_level_valid_values(self) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         for level in ("safe", "low", "medium", "high", "critical"):
             v = SecurityVerdict(is_safe=True, risk_level=level, reason="test")
             assert v.risk_level == level
 
     def test_detected_threats_default_empty(self) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         v = SecurityVerdict(is_safe=True, risk_level="safe", reason="ok")
         assert v.detected_threats == []
 
     def test_is_safe_boolean_required(self) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         with pytest.raises(ValidationError):
             SecurityVerdict(risk_level="safe", reason="test")  # type: ignore[call-arg]
 
@@ -167,7 +167,7 @@ class TestSecurityAuditorDeterministic:
 
     @pytest.fixture()
     def auditor(self) -> Any:
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
         client = DummyLLMClient()
         return SecurityAuditor(client)
 
@@ -319,7 +319,7 @@ class TestSecurityAuditorLLM:
 
     @pytest.fixture()
     def auditor(self) -> Any:
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
         client = DummyLLMClient()
         return SecurityAuditor(client)
 
@@ -327,7 +327,7 @@ class TestSecurityAuditorLLM:
     async def test_blocked_command_skips_llm(self) -> None:
         """Deterministically blocked commands must not invoke LLM at all."""
         client = DummyLLMClient()
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
         auditor = SecurityAuditor(client)
 
         result = await auditor.audit_command("rm -rf /")
@@ -352,7 +352,7 @@ class TestSecurityAuditorLLM:
             "reason": "Potentially destructive file overwrite",
             "detected_threats": ["file_overwrite"],
         }))
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
         auditor = SecurityAuditor(client)
 
         # Use a command with no semicolons/pipes so it passes the deterministic check
@@ -366,7 +366,7 @@ class TestSecurityAuditorLLM:
     async def test_context_passed_to_llm(self) -> None:
         """The context parameter should be included in the LLM prompt."""
         client = DummyLLMClient()
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
         auditor = SecurityAuditor(client)
 
         await auditor.audit_command("cat file.txt", context="User requested file reading in workspace")
@@ -383,14 +383,14 @@ class TestSecurityAuditorLLM:
 
     @pytest.mark.asyncio()
     async def test_audit_returns_security_verdict(self, auditor: Any) -> None:
-        from celeste_dag.tools.security_auditor import SecurityVerdict
+        from celeste.tools.security_auditor import SecurityVerdict
         result = await auditor.audit_command("echo hello")
         assert isinstance(result, SecurityVerdict)
 
     @pytest.mark.asyncio()
     async def test_llm_failure_returns_safe_verdict(self) -> None:
         """C1: If LLM raises, audit_command must fail-safe with is_safe=False."""
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
 
         client = DummyLLMClient()
         # Make structured_output raise an exception
@@ -415,7 +415,7 @@ class TestPromptInjectionBlocked:
 
     @pytest.fixture()
     def auditor(self) -> Any:
-        from celeste_dag.tools.security_auditor import SecurityAuditor
+        from celeste.tools.security_auditor import SecurityAuditor
         client = DummyLLMClient()
         return SecurityAuditor(client)
 
@@ -463,7 +463,7 @@ class TestToolRegistry:
 
     @pytest.fixture()
     def registry(self) -> Any:
-        from celeste_dag.tools.tool_registry import ToolRegistry
+        from celeste.tools.tool_registry import ToolRegistry
         return ToolRegistry()
 
     # --- Registration ---
@@ -574,7 +574,7 @@ class TestToolRegistry:
 
     def test_register_multiple_toolkits(self, registry: Any) -> None:
         """Registering multiple toolkits should merge their tools."""
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
 
         toolkit1 = DummyToolkit()
         toolkit2 = SystemDataToolkit()
@@ -590,7 +590,7 @@ class TestToolRegistry:
         assert registry.is_tool_allowed("list_directory")
 
     def test_get_all_schemas_multiple_toolkits(self, registry: Any) -> None:
-        from celeste_dag.toolkits.system_data import SystemDataToolkit
+        from celeste.toolkits.system_data import SystemDataToolkit
 
         registry.register_toolkit(DummyToolkit())
         registry.register_toolkit(SystemDataToolkit())
@@ -619,8 +619,8 @@ class TestSecurityIntegration:
     @pytest.mark.asyncio()
     async def test_safe_command_passes_both_layers(self) -> None:
         """A safe command that is also in the registry should pass."""
-        from celeste_dag.tools.security_auditor import SecurityAuditor
-        from celeste_dag.tools.tool_registry import ToolRegistry
+        from celeste.tools.security_auditor import SecurityAuditor
+        from celeste.tools.tool_registry import ToolRegistry
 
         client = DummyLLMClient()
         auditor = SecurityAuditor(client)
@@ -634,8 +634,8 @@ class TestSecurityIntegration:
     @pytest.mark.asyncio()
     async def test_unsafe_command_blocked_before_registry(self) -> None:
         """A dangerous command is caught by security auditor before registry lookup."""
-        from celeste_dag.tools.security_auditor import SecurityAuditor
-        from celeste_dag.tools.tool_registry import ToolRegistry
+        from celeste.tools.security_auditor import SecurityAuditor
+        from celeste.tools.tool_registry import ToolRegistry
 
         client = DummyLLMClient()
         auditor = SecurityAuditor(client)

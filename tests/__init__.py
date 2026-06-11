@@ -1,1 +1,1 @@
-"""Test suite for celeste-dag."""
+"""Test suite for celeste."""

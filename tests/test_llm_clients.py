@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from celeste_dag.config.settings import EngineSettings
-from celeste_dag.core.llm.base import (
+from celeste.config.settings import EngineSettings
+from celeste.core.llm.base import (
     BaseLLMClient,
     LLMMessage,
     LLMResponse,
@@ -379,7 +379,7 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_complete_translates_messages(self) -> None:
         """Messages should be translated to Anthropic's format (system separate)."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings()
         text_block = MagicMock()
@@ -394,7 +394,7 @@ class TestAnthropicAdapter:
             stop_reason="end_turn",
         )
 
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.messages = MagicMock()
             mock_instance.messages.create = mock_create
@@ -418,7 +418,7 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_complete_passes_model_override(self) -> None:
         """Model override should be passed through to Anthropic SDK."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings()
         text_block = MagicMock()
@@ -433,7 +433,7 @@ class TestAnthropicAdapter:
             stop_reason="end_turn",
         )
 
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.messages.create = mock_create
             MockAsyncAnthropic.return_value = mock_instance
@@ -450,7 +450,7 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_tool_schema_translation(self) -> None:
         """ToolCallDef should be translated to Anthropic's tool schema format."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings()
         text_block = MagicMock()
@@ -465,7 +465,7 @@ class TestAnthropicAdapter:
             stop_reason="tool_use",
         )
 
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.messages.create = mock_create
             MockAsyncAnthropic.return_value = mock_instance
@@ -495,10 +495,10 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_close_cleans_up(self) -> None:
         """close() should call aclose() on the underlying AsyncAnthropic client."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings()
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.aclose = AsyncMock()
             MockAsyncAnthropic.return_value = mock_instance
@@ -510,10 +510,10 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_api_key_passed_to_sdk(self) -> None:
         """The API key from settings should be passed to the Anthropic SDK."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings(LLM_API_KEY="sk-test-my-key")
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             MockAsyncAnthropic.return_value = MagicMock()
             AnthropicClient(settings)
             MockAsyncAnthropic.assert_called_once()
@@ -523,7 +523,7 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_multi_text_blocks_joined(self) -> None:
         """When response has multiple text blocks, all should be joined with newline."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings()
         block1 = MagicMock()
@@ -542,7 +542,7 @@ class TestAnthropicAdapter:
             stop_reason="end_turn",
         )
 
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.messages.create = mock_create
             MockAsyncAnthropic.return_value = mock_instance
@@ -557,7 +557,7 @@ class TestAnthropicAdapter:
     @pytest.mark.asyncio
     async def test_tool_use_input_serialized_as_json(self) -> None:
         """tool_use block.input should be serialized with json.dumps, not str()."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = self._make_settings()
         tool_block = MagicMock()
@@ -574,7 +574,7 @@ class TestAnthropicAdapter:
             stop_reason="tool_use",
         )
 
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.messages.create = mock_create
             MockAsyncAnthropic.return_value = mock_instance
@@ -616,7 +616,7 @@ class TestOpenAIAdapter:
     @pytest.mark.asyncio
     async def test_complete_translates_messages(self) -> None:
         """Messages should be sent directly to OpenAI format."""
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = self._make_settings()
         mock_create = AsyncMock()
@@ -631,7 +631,7 @@ class TestOpenAIAdapter:
             usage=MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
 
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
+        with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
             mock_instance = MagicMock()
             mock_instance.chat = MagicMock()
             mock_instance.chat.completions = MagicMock()
@@ -653,7 +653,7 @@ class TestOpenAIAdapter:
     @pytest.mark.asyncio
     async def test_tool_schema_translation(self) -> None:
         """ToolCallDef should be translated to OpenAI's function calling format."""
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = self._make_settings()
         func_mock = MagicMock()
@@ -680,7 +680,7 @@ class TestOpenAIAdapter:
             usage=MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
 
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
+        with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
             mock_instance = MagicMock()
             mock_instance.chat.completions.create = mock_create
             MockAsyncOpenAI.return_value = mock_instance
@@ -710,7 +710,7 @@ class TestOpenAIAdapter:
     @pytest.mark.asyncio
     async def test_structured_output_native(self) -> None:
         """OpenAI adapter should support structured output via response_format or JSON mode."""
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = self._make_settings()
 
@@ -730,7 +730,7 @@ class TestOpenAIAdapter:
             usage=MagicMock(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
 
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
+        with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
             mock_instance = MagicMock()
             mock_instance.chat.completions.create = mock_create
             MockAsyncOpenAI.return_value = mock_instance
@@ -746,20 +746,20 @@ class TestOpenAIAdapter:
 
     @pytest.mark.asyncio
     async def test_close_cleans_up(self) -> None:
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = self._make_settings()
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
+        with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
             MockAsyncOpenAI.return_value = MagicMock()
             client = OpenAIClient(settings)
             await client.close()
 
     @pytest.mark.asyncio
     async def test_api_key_passed_to_sdk(self) -> None:
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = self._make_settings(LLM_API_KEY="sk-openai-test")
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
+        with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
             MockAsyncOpenAI.return_value = MagicMock()
             OpenAIClient(settings)
             call_kwargs = MockAsyncOpenAI.call_args.kwargs
@@ -785,7 +785,7 @@ class TestGeminiAdapter:
 
     @pytest.mark.asyncio
     async def test_complete_translates_messages(self) -> None:
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings()
 
@@ -799,7 +799,7 @@ class TestGeminiAdapter:
         )
         mock_model.generate_content_async = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = mock_model
             client = GeminiClient(settings)
 
@@ -814,7 +814,7 @@ class TestGeminiAdapter:
     @pytest.mark.asyncio
     async def test_system_message_handled(self) -> None:
         """System messages should be translated to Gemini's system_instruction."""
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings()
 
@@ -828,7 +828,7 @@ class TestGeminiAdapter:
         )
         mock_model.generate_content_async = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = mock_model
             client = GeminiClient(settings)
 
@@ -841,10 +841,10 @@ class TestGeminiAdapter:
 
     @pytest.mark.asyncio
     async def test_api_key_configured(self) -> None:
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings(LLM_API_KEY="google-test-key")
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = MagicMock()
             client = GeminiClient(settings)
             mock_genai.configure.assert_called_once()
@@ -853,10 +853,10 @@ class TestGeminiAdapter:
 
     @pytest.mark.asyncio
     async def test_close_cleans_up(self) -> None:
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings()
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = MagicMock()
             client = GeminiClient(settings)
             await client.close()
@@ -864,10 +864,10 @@ class TestGeminiAdapter:
     @pytest.mark.asyncio
     async def test_tools_raises_not_implemented(self) -> None:
         """Gemini adapter should raise NotImplementedError when tools are provided."""
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings()
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = MagicMock()
             client = GeminiClient(settings)
 
@@ -884,7 +884,7 @@ class TestGeminiAdapter:
     @pytest.mark.asyncio
     async def test_model_override_does_not_mutate_instance(self) -> None:
         """Passing model= should not permanently change the default model."""
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings()
 
@@ -899,7 +899,7 @@ class TestGeminiAdapter:
         mock_response.candidates = []
         mock_model.generate_content_async = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = mock_model
             client = GeminiClient(settings)
             original_model = client._model_name
@@ -914,7 +914,7 @@ class TestGeminiAdapter:
     @pytest.mark.asyncio
     async def test_finish_reason_from_response(self) -> None:
         """Gemini adapter should read actual finish_reason from the response."""
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = self._make_settings()
 
@@ -934,7 +934,7 @@ class TestGeminiAdapter:
         mock_response.candidates = [mock_candidate]
         mock_model.generate_content_async = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.gemini.genai") as mock_genai:
+        with patch("celeste.core.llm.gemini.genai") as mock_genai:
             mock_genai.GenerativeModel.return_value = mock_model
             client = GeminiClient(settings)
 
@@ -963,7 +963,7 @@ class TestOllamaAdapter:
 
     @pytest.mark.asyncio
     async def test_complete_makes_http_request(self) -> None:
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = self._make_settings()
 
@@ -979,7 +979,7 @@ class TestOllamaAdapter:
 
         mock_post = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
             mock_client_instance = MagicMock()
             mock_client_instance.post = mock_post
             mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
@@ -1002,7 +1002,7 @@ class TestOllamaAdapter:
 
     @pytest.mark.asyncio
     async def test_complete_passes_model_and_messages(self) -> None:
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = self._make_settings()
 
@@ -1017,7 +1017,7 @@ class TestOllamaAdapter:
         mock_response.raise_for_status = MagicMock()
         mock_post = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
             mock_client_instance = MagicMock()
             mock_client_instance.post = mock_post
             mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
@@ -1039,11 +1039,11 @@ class TestOllamaAdapter:
 
     @pytest.mark.asyncio
     async def test_close_cleans_up(self) -> None:
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = self._make_settings()
 
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
             mock_instance = MagicMock()
             mock_instance.aclose = AsyncMock()
             MockAsyncClient.return_value = mock_instance
@@ -1054,10 +1054,10 @@ class TestOllamaAdapter:
     @pytest.mark.asyncio
     async def test_no_api_key_needed(self) -> None:
         """Ollama should work without an API key."""
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = self._make_settings(LLM_API_KEY=None)
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
             mock_instance = MagicMock()
             MockAsyncClient.return_value = mock_instance
             client = OllamaClient(settings)
@@ -1066,7 +1066,7 @@ class TestOllamaAdapter:
     @pytest.mark.asyncio
     async def test_uses_base_url(self) -> None:
         """Ollama client should use LLM_BASE_URL from settings."""
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = self._make_settings(LLM_BASE_URL="http://my-ollama:11434")
 
@@ -1081,7 +1081,7 @@ class TestOllamaAdapter:
         mock_response.raise_for_status = MagicMock()
         mock_post = AsyncMock(return_value=mock_response)
 
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
             mock_client_instance = MagicMock()
             mock_client_instance.post = mock_post
             mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
@@ -1104,73 +1104,73 @@ class TestCreateLLMClient:
     """create_llm_client must return the correct adapter type based on settings."""
 
     def test_anthropic_provider(self) -> None:
-        from celeste_dag.core.llm import create_llm_client
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm import create_llm_client
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = EngineSettings(
             LLM_PROVIDER="anthropic",
             LLM_MODEL="claude-3-5-sonnet-20241022",
             LLM_API_KEY="sk-test",
         )
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic"):
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic"):
             client = create_llm_client(settings)
             assert isinstance(client, AnthropicClient)
 
     def test_openai_provider(self) -> None:
-        from celeste_dag.core.llm import create_llm_client
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm import create_llm_client
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = EngineSettings(
             LLM_PROVIDER="openai",
             LLM_MODEL="gpt-4o",
             LLM_API_KEY="sk-test",
         )
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI"):
+        with patch("celeste.core.llm.openai.AsyncOpenAI"):
             client = create_llm_client(settings)
             assert isinstance(client, OpenAIClient)
 
     def test_gemini_provider(self) -> None:
-        from celeste_dag.core.llm import create_llm_client
-        from celeste_dag.core.llm.gemini import GeminiClient
+        from celeste.core.llm import create_llm_client
+        from celeste.core.llm.gemini import GeminiClient
 
         settings = EngineSettings(
             LLM_PROVIDER="gemini",
             LLM_MODEL="gemini-2.0-flash",
             LLM_API_KEY="test-key",
         )
-        with patch("celeste_dag.core.llm.gemini.genai"):
+        with patch("celeste.core.llm.gemini.genai"):
             client = create_llm_client(settings)
             assert isinstance(client, GeminiClient)
 
     def test_ollama_provider(self) -> None:
-        from celeste_dag.core.llm import create_llm_client
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm import create_llm_client
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = EngineSettings(
             LLM_PROVIDER="ollama",
             LLM_MODEL="llama3",
             LLM_BASE_URL="http://localhost:11434",
         )
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient"):
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient"):
             client = create_llm_client(settings)
             assert isinstance(client, OllamaClient)
 
     def test_returns_base_llm_client(self) -> None:
         """All adapters should be instances of BaseLLMClient."""
-        from celeste_dag.core.llm import create_llm_client
+        from celeste.core.llm import create_llm_client
 
         settings = EngineSettings(
             LLM_PROVIDER="openai",
             LLM_MODEL="gpt-4o",
             LLM_API_KEY="sk-test",
         )
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI"):
+        with patch("celeste.core.llm.openai.AsyncOpenAI"):
             client = create_llm_client(settings)
             assert isinstance(client, BaseLLMClient)
 
     def test_unknown_provider_raises(self) -> None:
         """An unsupported provider should raise ValueError."""
-        from celeste_dag.core.llm import create_llm_client
+        from celeste.core.llm import create_llm_client
 
         # We can't create an EngineSettings with an invalid provider directly,
         # so we test with a mocked settings object
@@ -1195,7 +1195,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_anthropic_api_error(self) -> None:
         """AnthropicClient should propagate API errors."""
-        from celeste_dag.core.llm.anthropic import AnthropicClient
+        from celeste.core.llm.anthropic import AnthropicClient
 
         settings = EngineSettings(
             LLM_PROVIDER="anthropic",
@@ -1203,7 +1203,7 @@ class TestErrorHandling:
             LLM_API_KEY="sk-test",
         )
 
-        with patch("celeste_dag.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
+        with patch("celeste.core.llm.anthropic.AsyncAnthropic") as MockAsyncAnthropic:
             mock_instance = MagicMock()
             mock_instance.messages.create = AsyncMock(
                 side_effect=Exception("API rate limit exceeded")
@@ -1219,7 +1219,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_openai_api_error(self) -> None:
         """OpenAIClient should propagate API errors."""
-        from celeste_dag.core.llm.openai import OpenAIClient
+        from celeste.core.llm.openai import OpenAIClient
 
         settings = EngineSettings(
             LLM_PROVIDER="openai",
@@ -1227,7 +1227,7 @@ class TestErrorHandling:
             LLM_API_KEY="sk-test",
         )
 
-        with patch("celeste_dag.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
+        with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
             mock_instance = MagicMock()
             mock_instance.chat.completions.create = AsyncMock(
                 side_effect=Exception("Server error")
@@ -1243,7 +1243,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_ollama_connection_error(self) -> None:
         """OllamaClient should handle connection errors."""
-        from celeste_dag.core.llm.ollama import OllamaClient
+        from celeste.core.llm.ollama import OllamaClient
 
         settings = EngineSettings(
             LLM_PROVIDER="ollama",
@@ -1251,7 +1251,7 @@ class TestErrorHandling:
             LLM_BASE_URL="http://localhost:11434",
         )
 
-        with patch("celeste_dag.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
+        with patch("celeste.core.llm.ollama.httpx.AsyncClient") as MockAsyncClient:
             mock_instance = MagicMock()
             mock_instance.post = AsyncMock(
                 side_effect=Exception("Connection refused")
@@ -1291,15 +1291,15 @@ class TestReexports:
     """Public API should be re-exported from core.llm package."""
 
     def test_create_llm_client_reexported(self) -> None:
-        from celeste_dag.core.llm import create_llm_client
+        from celeste.core.llm import create_llm_client
         assert callable(create_llm_client)
 
     def test_base_client_reexported(self) -> None:
-        from celeste_dag.core.llm import BaseLLMClient
+        from celeste.core.llm import BaseLLMClient
         assert BaseLLMClient is not None
 
     def test_models_reexported(self) -> None:
-        from celeste_dag.core.llm import LLMMessage, LLMResponse, ToolCallDef
+        from celeste.core.llm import LLMMessage, LLMResponse, ToolCallDef
         assert LLMMessage is not None
         assert LLMResponse is not None
         assert ToolCallDef is not None

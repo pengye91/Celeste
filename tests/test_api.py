@@ -1,5 +1,5 @@
 """
-Tests for the FastAPI Web API layer in celeste_dag.api.
+Tests for the FastAPI Web API layer in celeste.api.
 
 Follows strict TDD: these tests are written BEFORE the implementation.
 Uses httpx.AsyncClient with ASGITransport for in-process testing.
@@ -28,10 +28,10 @@ import pytest
 import httpx
 from sqlalchemy import select
 
-from celeste_dag.config.settings import EngineSettings
-from celeste_dag.core.planner import DAGNode, DAGPlan
-from celeste_dag.core.workspaces.base import BaseWorkspace, WorkspaceEvent
-from celeste_dag.database.models import (
+from celeste.config.settings import EngineSettings
+from celeste.core.planner import DAGNode, DAGPlan
+from celeste.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+from celeste.database.models import (
     TaskEvent,
     TaskEventType,
     TaskNode,
@@ -39,7 +39,7 @@ from celeste_dag.database.models import (
     Workflow,
     WorkflowStatus,
 )
-from celeste_dag.core.agent.agent import EnvironmentAgent
+from celeste.core.agent.agent import EnvironmentAgent
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ class MockWorkspace(BaseWorkspace):
 @pytest.fixture(autouse=True)
 def _reset_db_module():
     """Reset database module state between tests."""
-    import celeste_dag.database.db as db_mod
+    import celeste.database.db as db_mod
 
     db_mod._engine = None
     db_mod._async_session_factory = None
@@ -147,7 +147,7 @@ async def client(settings):
     Manually triggers the lifespan (startup/shutdown) since httpx.ASGITransport
     does not handle ASGI lifespan events automatically.
     """
-    from celeste_dag.api.app import create_app
+    from celeste.api.app import create_app
 
     app = create_app(settings=settings, workspace_factory=lambda: MockWorkspace())
 
@@ -227,7 +227,7 @@ class TestCreateWorkflow:
         data = resp.json()
         wf_id = uuid.UUID(data["workflow_id"])
 
-        from celeste_dag.database.db import get_session
+        from celeste.database.db import get_session
 
         async with get_session() as session:
             result = await session.execute(
@@ -513,7 +513,7 @@ class TestWorkflowStatus:
         wf_id = create_resp.json()["workflow_id"]
         wf_uuid = uuid.UUID(wf_id)
 
-        from celeste_dag.database.db import get_session
+        from celeste.database.db import get_session
 
         # Manually set one node to failed and one to completed
         async with get_session() as session:
@@ -707,7 +707,7 @@ class TestCancelWorkflow:
     @pytest.mark.asyncio
     async def test_cancel_running_workflow_cancels_task(self, settings):
         """Cancelling a running workflow cancels the asyncio.Task and updates status."""
-        from celeste_dag.api.app import create_app
+        from celeste.api.app import create_app
 
         class SlowWorkspace(BaseWorkspace):
             """A workspace that blocks long enough to cancel mid-execution."""

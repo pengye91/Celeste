@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from celeste_dag.core.agent.driver import (
+from celeste.core.agent.driver import (
     BaseDriver,
     CommandResult,
     DirectoryResult,

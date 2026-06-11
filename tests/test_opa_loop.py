@@ -25,10 +25,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from celeste_dag.config.settings import EngineSettings
-from celeste_dag.core.evaluator import EvaluatorDecision
-from celeste_dag.core.exceptions import PlannerTimeoutError
-from celeste_dag.core.planner import DAGFragment, DAGNode
+from celeste.config.settings import EngineSettings
+from celeste.core.evaluator import EvaluatorDecision
+from celeste.core.exceptions import PlannerTimeoutError
+from celeste.core.planner import DAGFragment, DAGNode
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ import asyncio
 
 def test_workflow_result_creation():
     """WorkflowResult can be created with all fields."""
-    from celeste_dag.core.opa_loop import WorkflowResult
+    from celeste.core.opa_loop import WorkflowResult
 
     result = WorkflowResult(
         status="completed",
@@ -167,7 +167,7 @@ def test_workflow_result_creation():
 
 def test_workflow_result_defaults():
     """WorkflowResult reason defaults to None."""
-    from celeste_dag.core.opa_loop import WorkflowResult
+    from celeste.core.opa_loop import WorkflowResult
 
     result = WorkflowResult(status="failed", cycle_count=0, llm_tokens_accumulated=0)
     assert result.reason is None
@@ -180,7 +180,7 @@ def test_workflow_result_defaults():
 
 def test_opa_loop_init():
     """OPALoop can be initialized with agent, planner, evaluator."""
-    from celeste_dag.core.opa_loop import OPALoop
+    from celeste.core.opa_loop import OPALoop
 
     agent = _StubAgent()
     planner = _StubPlanner()
@@ -194,7 +194,7 @@ def test_opa_loop_init():
 
 def test_opa_loop_init_with_settings():
     """OPALoop can be initialized with custom settings."""
-    from celeste_dag.core.opa_loop import OPALoop
+    from celeste.core.opa_loop import OPALoop
 
     settings = EngineSettings(MAX_OPA_CYCLES=50, MAX_LLM_TOKENS=10000)
     loop = OPALoop(
@@ -215,7 +215,7 @@ def test_opa_loop_init_with_settings():
 @pytest.mark.asyncio
 async def test_opa_loop_goal_achieved_in_one_cycle():
     """Goal achieved in a single OPA cycle returns completed status."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {"/tmp": ["a.txt"]}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=True)
@@ -236,7 +236,7 @@ async def test_opa_loop_goal_achieved_in_one_cycle():
 @pytest.mark.asyncio
 async def test_opa_loop_goal_achieved_in_n_cycles():
     """Goal achieved after multiple OPA cycles returns completed status."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment1 = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -268,7 +268,7 @@ async def test_opa_loop_goal_achieved_in_n_cycles():
 @pytest.mark.asyncio
 async def test_opa_loop_tier1_retry_transient_failure():
     """Tier 1 retries transient tool failures up to 3 times with backoff."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     # First 2 calls fail transiently, 3rd succeeds
     agent = _StubAgent(
@@ -306,7 +306,7 @@ async def test_opa_loop_tier1_retry_transient_failure():
 @pytest.mark.asyncio
 async def test_opa_loop_tier1_retry_exhausted_escalates_to_tier2():
     """When Tier 1 retries are exhausted, the loop escalates to Tier 2 (replan)."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     # Always fail
@@ -345,7 +345,7 @@ async def test_opa_loop_tier1_retry_exhausted_escalates_to_tier2():
 @pytest.mark.asyncio
 async def test_opa_loop_tier2_scoped_replan():
     """Evaluator returning REPLAN triggers Tier 2 scoped replan."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment1 = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -375,7 +375,7 @@ async def test_opa_loop_tier2_scoped_replan():
 @pytest.mark.asyncio
 async def test_opa_loop_tier3_full_replan():
     """Drastic environment changes trigger Tier 3 full replan."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     # Snapshot changes drastically between cycles
     snapshots = [
@@ -420,7 +420,7 @@ async def test_opa_loop_tier3_full_replan():
 @pytest.mark.asyncio
 async def test_opa_loop_max_cycles_exceeded():
     """Exceeding MAX_OPA_CYCLES returns escalated WorkflowResult."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -441,7 +441,7 @@ async def test_opa_loop_max_cycles_exceeded():
 @pytest.mark.asyncio
 async def test_opa_loop_token_budget_exceeded():
     """Exceeding MAX_LLM_TOKENS returns escalated WorkflowResult."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -460,7 +460,7 @@ async def test_opa_loop_token_budget_exceeded():
 @pytest.mark.asyncio
 async def test_opa_loop_evaluator_returns_escalate():
     """Evaluator returning ESCALATE returns escalated WorkflowResult with reason."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -487,7 +487,7 @@ async def test_opa_loop_evaluator_returns_escalate():
 @pytest.mark.asyncio
 async def test_opa_loop_agent_unreachable_during_observation():
     """Agent unreachable during observation returns failed WorkflowResult."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result=ConnectionError("agent unreachable"))
     planner = _StubPlanner()
@@ -510,7 +510,7 @@ async def test_opa_loop_agent_unreachable_during_observation():
 @pytest.mark.asyncio
 async def test_opa_loop_planner_timeout_first_cycle_escalates():
     """Planner timeout on first cycle escalates since no progress was made."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     planner = _StubPlanner(side_effect=PlannerTimeoutError("LLM timeout"))
@@ -528,7 +528,7 @@ async def test_opa_loop_planner_timeout_first_cycle_escalates():
 @pytest.mark.asyncio
 async def test_opa_loop_planner_timeout_later_cycle_retries():
     """Planner timeout after first cycle continues to retry next cycle."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment1 = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -563,7 +563,7 @@ async def test_opa_loop_planner_timeout_later_cycle_retries():
 @pytest.mark.asyncio
 async def test_opa_loop_sequential_planning_no_pipeline():
     """Nodes with dependencies are executed sequentially, respecting order."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     execution_order: list[str] = []
 
@@ -601,7 +601,7 @@ async def test_opa_loop_sequential_planning_no_pipeline():
 @pytest.mark.asyncio
 async def test_workflow_executor_executes_nodes():
     """WorkflowExecutor executes each node via agent.call_tool()."""
-    from celeste_dag.core.opa_loop import WorkflowExecutor
+    from celeste.core.opa_loop import WorkflowExecutor
 
     calls: list[dict[str, Any]] = []
 
@@ -632,7 +632,7 @@ async def test_workflow_executor_executes_nodes():
 @pytest.mark.asyncio
 async def test_workflow_executor_tracks_failed_nodes():
     """WorkflowExecutor tracks which nodes failed."""
-    from celeste_dag.core.opa_loop import WorkflowExecutor
+    from celeste.core.opa_loop import WorkflowExecutor
 
     async def mock_call_tool(name: str, arguments: dict[str, Any] | None = None, timeout_ms: int | None = None) -> dict[str, Any]:
         if name == "cmd2":
@@ -657,7 +657,7 @@ async def test_workflow_executor_tracks_failed_nodes():
 @pytest.mark.asyncio
 async def test_workflow_executor_respects_dependencies():
     """WorkflowExecutor executes nodes in dependency order."""
-    from celeste_dag.core.opa_loop import WorkflowExecutor
+    from celeste.core.opa_loop import WorkflowExecutor
 
     execution_order: list[str] = []
 
@@ -685,7 +685,7 @@ async def test_workflow_executor_respects_dependencies():
 @pytest.mark.asyncio
 async def test_workflow_executor_skips_dependents_of_failed_nodes():
     """WorkflowExecutor skips nodes that depend on failed nodes."""
-    from celeste_dag.core.opa_loop import WorkflowExecutor
+    from celeste.core.opa_loop import WorkflowExecutor
 
     execution_order: list[str] = []
 
@@ -724,7 +724,7 @@ async def test_workflow_executor_skips_dependents_of_failed_nodes():
 @pytest.mark.asyncio
 async def test_opa_loop_run_overrides_max_cycles():
     """run() max_cycles parameter overrides settings.MAX_OPA_CYCLES."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
@@ -744,7 +744,7 @@ async def test_opa_loop_run_overrides_max_cycles():
 @pytest.mark.asyncio
 async def test_opa_loop_run_overrides_max_llm_tokens():
     """run() max_llm_tokens parameter overrides settings.MAX_LLM_TOKENS."""
-    from celeste_dag.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)

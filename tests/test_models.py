@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session
 
-from celeste_dag.database.models import (
+from celeste.database.models import (
     Base,
     TaskEvent,
     TaskEventType,

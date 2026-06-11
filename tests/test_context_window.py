@@ -2,7 +2,7 @@
 
 import pytest
 
-from celeste_dag.core.context_window import ContextWindowManager
+from celeste.core.context_window import ContextWindowManager
 
 
 class TestContextWindowManager:

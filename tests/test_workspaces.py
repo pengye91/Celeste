@@ -17,7 +17,7 @@ from typing import AsyncIterator
 
 import pytest
 
-from celeste_dag.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+from celeste.core.workspaces.base import BaseWorkspace, WorkspaceEvent
 
 
 # ===========================================================================
@@ -116,48 +116,48 @@ class TestActorBoundary:
     """Workspace modules must not import database models or shared mutable state."""
 
     def test_base_workspace_no_db_imports(self):
-        """base.py must not import from celeste_dag.database."""
-        import celeste_dag.core.workspaces.base as base_mod
+        """base.py must not import from celeste.database."""
+        import celeste.core.workspaces.base as base_mod
 
         source = inspect.getsource(base_mod)
-        assert "from celeste_dag.database" not in source
-        assert "import celeste_dag.database" not in source
+        assert "from celeste.database" not in source
+        assert "import celeste.database" not in source
 
     def test_local_tmp_no_db_imports(self):
-        """local_tmp.py must not import from celeste_dag.database."""
-        import celeste_dag.core.workspaces.local_tmp as mod
+        """local_tmp.py must not import from celeste.database."""
+        import celeste.core.workspaces.local_tmp as mod
 
         source = inspect.getsource(mod)
-        assert "from celeste_dag.database" not in source
-        assert "import celeste_dag.database" not in source
+        assert "from celeste.database" not in source
+        assert "import celeste.database" not in source
 
     def test_git_worktree_no_db_imports(self):
-        """git_worktree.py must not import from celeste_dag.database."""
-        import celeste_dag.core.workspaces.git_worktree as mod
+        """git_worktree.py must not import from celeste.database."""
+        import celeste.core.workspaces.git_worktree as mod
 
         source = inspect.getsource(mod)
-        assert "from celeste_dag.database" not in source
-        assert "import celeste_dag.database" not in source
+        assert "from celeste.database" not in source
+        assert "import celeste.database" not in source
 
     def test_docker_no_db_imports(self):
-        """docker.py must not import from celeste_dag.database."""
-        import celeste_dag.core.workspaces.docker as mod
+        """docker.py must not import from celeste.database."""
+        import celeste.core.workspaces.docker as mod
 
         source = inspect.getsource(mod)
-        assert "from celeste_dag.database" not in source
-        assert "import celeste_dag.database" not in source
+        assert "from celeste.database" not in source
+        assert "import celeste.database" not in source
 
     def test_firecracker_no_db_imports(self):
-        """firecracker.py must not import from celeste_dag.database."""
-        import celeste_dag.core.workspaces.firecracker as mod
+        """firecracker.py must not import from celeste.database."""
+        import celeste.core.workspaces.firecracker as mod
 
         source = inspect.getsource(mod)
-        assert "from celeste_dag.database" not in source
-        assert "import celeste_dag.database" not in source
+        assert "from celeste.database" not in source
+        assert "import celeste.database" not in source
 
     def test_workspace_state_isolation(self):
         """Two workspace instances must not share mutable state."""
-        from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         ws1 = LocalTmpWorkspace()
         ws2 = LocalTmpWorkspace()
@@ -173,7 +173,7 @@ class TestActorBoundary:
 @pytest.fixture
 def local_ws():
     """Provide a fresh LocalTmpWorkspace instance."""
-    from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+    from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
     return LocalTmpWorkspace()
 
@@ -361,7 +361,7 @@ class TestLocalTmpContextManager:
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
-        from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         ws = LocalTmpWorkspace()
         path = None
@@ -376,7 +376,7 @@ class TestLocalTmpContextManager:
 
     @pytest.mark.asyncio
     async def test_context_manager_execute(self):
-        from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         ws = LocalTmpWorkspace()
         async with ws:
@@ -430,7 +430,7 @@ class TestGitWorktreeSetup:
 
     @pytest.mark.asyncio
     async def test_creates_worktree(self, temp_git_repo):
-        from celeste_dag.core.workspaces.git_worktree import GitWorktreeWorkspace
+        from celeste.core.workspaces.git_worktree import GitWorktreeWorkspace
 
         ws = GitWorktreeWorkspace(repo_path=temp_git_repo, branch_name="test-branch")
         await ws.setup()
@@ -451,7 +451,7 @@ class TestGitWorktreeSetup:
 
     @pytest.mark.asyncio
     async def test_worktree_is_separate_branch(self, temp_git_repo):
-        from celeste_dag.core.workspaces.git_worktree import GitWorktreeWorkspace
+        from celeste.core.workspaces.git_worktree import GitWorktreeWorkspace
 
         ws = GitWorktreeWorkspace(repo_path=temp_git_repo, branch_name="feature-x")
         await ws.setup()
@@ -474,7 +474,7 @@ class TestGitWorktreeTeardown:
 
     @pytest.mark.asyncio
     async def test_teardown_removes_worktree(self, temp_git_repo):
-        from celeste_dag.core.workspaces.git_worktree import GitWorktreeWorkspace
+        from celeste.core.workspaces.git_worktree import GitWorktreeWorkspace
 
         ws = GitWorktreeWorkspace(repo_path=temp_git_repo, branch_name="cleanup-test")
         await ws.setup()
@@ -491,7 +491,7 @@ class TestGitWorktreeExecute:
 
     @pytest.mark.asyncio
     async def test_execute_in_worktree(self, temp_git_repo):
-        from celeste_dag.core.workspaces.git_worktree import GitWorktreeWorkspace
+        from celeste.core.workspaces.git_worktree import GitWorktreeWorkspace
 
         ws = GitWorktreeWorkspace(repo_path=temp_git_repo, branch_name="exec-test")
         await ws.setup()
@@ -512,7 +512,7 @@ class TestGitWorktreeContextManager:
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self, temp_git_repo):
-        from celeste_dag.core.workspaces.git_worktree import GitWorktreeWorkspace
+        from celeste.core.workspaces.git_worktree import GitWorktreeWorkspace
 
         ws = GitWorktreeWorkspace(repo_path=temp_git_repo, branch_name="ctx-test")
         path = None
@@ -535,7 +535,7 @@ class TestDockerWorkspaceStub:
 
     @pytest.mark.asyncio
     async def test_setup_defines_config(self):
-        from celeste_dag.core.workspaces.docker import DockerWorkspace
+        from celeste.core.workspaces.docker import DockerWorkspace
 
         ws = DockerWorkspace(image="python:3.11")
         # Setup should work (just defines config)
@@ -546,7 +546,7 @@ class TestDockerWorkspaceStub:
 
     @pytest.mark.asyncio
     async def test_execute_raises_not_implemented(self):
-        from celeste_dag.core.workspaces.docker import DockerWorkspace
+        from celeste.core.workspaces.docker import DockerWorkspace
 
         ws = DockerWorkspace(image="python:3.11")
         await ws.setup()
@@ -557,7 +557,7 @@ class TestDockerWorkspaceStub:
 
     @pytest.mark.asyncio
     async def test_teardown_is_safe(self):
-        from celeste_dag.core.workspaces.docker import DockerWorkspace
+        from celeste.core.workspaces.docker import DockerWorkspace
 
         ws = DockerWorkspace(image="python:3.11")
         await ws.setup()
@@ -575,7 +575,7 @@ class TestFirecrackerWorkspaceStub:
 
     @pytest.mark.asyncio
     async def test_setup_defines_config(self):
-        from celeste_dag.core.workspaces.firecracker import FirecrackerWorkspace
+        from celeste.core.workspaces.firecracker import FirecrackerWorkspace
 
         ws = FirecrackerWorkspace(kernel_path="/path/to/kernel")
         await ws.setup()
@@ -585,7 +585,7 @@ class TestFirecrackerWorkspaceStub:
 
     @pytest.mark.asyncio
     async def test_execute_raises_not_implemented(self):
-        from celeste_dag.core.workspaces.firecracker import FirecrackerWorkspace
+        from celeste.core.workspaces.firecracker import FirecrackerWorkspace
 
         ws = FirecrackerWorkspace(kernel_path="/path/to/kernel")
         await ws.setup()
@@ -596,7 +596,7 @@ class TestFirecrackerWorkspaceStub:
 
     @pytest.mark.asyncio
     async def test_teardown_is_safe(self):
-        from celeste_dag.core.workspaces.firecracker import FirecrackerWorkspace
+        from celeste.core.workspaces.firecracker import FirecrackerWorkspace
 
         ws = FirecrackerWorkspace(kernel_path="/path/to/kernel")
         await ws.setup()
@@ -615,7 +615,7 @@ class TestLocalTmpIntegration:
     @pytest.mark.asyncio
     async def test_full_lifecycle(self):
         """Setup -> execute multiple commands -> teardown."""
-        from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         ws = LocalTmpWorkspace()
         await ws.setup()
@@ -649,7 +649,7 @@ class TestLocalTmpIntegration:
     @pytest.mark.asyncio
     async def test_event_timestamps_ordered(self):
         """Events should have non-decreasing timestamps."""
-        from celeste_dag.core.workspaces.local_tmp import LocalTmpWorkspace
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         ws = LocalTmpWorkspace()
         async with ws:

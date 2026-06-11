@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from celeste_dag.core.llm.base import BaseLLMClient, LLMMessage, LLMResponse
-from celeste_dag.config.settings import EngineSettings
+from celeste.core.llm.base import BaseLLMClient, LLMMessage, LLMResponse
+from celeste.config.settings import EngineSettings
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ class TestEvaluatorDecision:
     """Tests for the EvaluatorDecision class."""
 
     def test_decision_values_exist(self):
-        from celeste_dag.core.evaluator import EvaluatorDecision
+        from celeste.core.evaluator import EvaluatorDecision
 
         assert EvaluatorDecision.DONE is not None
         assert EvaluatorDecision.REPLAN is not None
@@ -90,7 +90,7 @@ class TestEvaluatorDecision:
         assert EvaluatorDecision.CONTINUE is not None
 
     def test_decision_string_equality(self):
-        from celeste_dag.core.evaluator import EvaluatorDecision
+        from celeste.core.evaluator import EvaluatorDecision
 
         assert EvaluatorDecision.DONE == "DONE"
         assert EvaluatorDecision.REPLAN == "REPLAN"
@@ -98,13 +98,13 @@ class TestEvaluatorDecision:
         assert EvaluatorDecision.CONTINUE == "CONTINUE"
 
     def test_decision_reason_attribute(self):
-        from celeste_dag.core.evaluator import EvaluatorDecision
+        from celeste.core.evaluator import EvaluatorDecision
 
         decision = EvaluatorDecision.DONE
         assert hasattr(decision, "reason")
 
     def test_decision_reason_settable(self):
-        from celeste_dag.core.evaluator import EvaluatorDecision
+        from celeste.core.evaluator import EvaluatorDecision
 
         decision = EvaluatorDecision.DONE
         decision.reason = "All tasks completed successfully."
@@ -122,7 +122,7 @@ class TestEvaluatorDecisions:
     @pytest.mark.asyncio()
     async def test_evaluator_returns_done(self):
         """Evaluator should return DONE when LLM responds with DONE."""
-        from celeste_dag.core.evaluator import Evaluator, EvaluatorDecision
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
 
         client = _StubLLMClient(response_content="DONE\nGoal fully achieved.")
         evaluator = Evaluator(client)
@@ -137,7 +137,7 @@ class TestEvaluatorDecisions:
     @pytest.mark.asyncio()
     async def test_evaluator_returns_replan(self):
         """Evaluator should return REPLAN when LLM responds with REPLAN."""
-        from celeste_dag.core.evaluator import Evaluator, EvaluatorDecision
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
 
         client = _StubLLMClient(response_content="REPLAN\nNeed a different approach.")
         evaluator = Evaluator(client)
@@ -152,7 +152,7 @@ class TestEvaluatorDecisions:
     @pytest.mark.asyncio()
     async def test_evaluator_returns_escalate(self):
         """Evaluator should return ESCALATE when LLM responds with ESCALATE."""
-        from celeste_dag.core.evaluator import Evaluator, EvaluatorDecision
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
 
         client = _StubLLMClient(response_content="ESCALATE\nHuman intervention required.")
         evaluator = Evaluator(client)
@@ -167,7 +167,7 @@ class TestEvaluatorDecisions:
     @pytest.mark.asyncio()
     async def test_evaluator_returns_continue(self):
         """Evaluator should return CONTINUE when LLM responds with CONTINUE."""
-        from celeste_dag.core.evaluator import Evaluator, EvaluatorDecision
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
 
         client = _StubLLMClient(response_content="CONTINUE\nMore tasks needed.")
         evaluator = Evaluator(client)
@@ -191,7 +191,7 @@ class TestEvaluatorCache:
     @pytest.mark.asyncio()
     async def test_evaluator_cache_hit(self):
         """Second call with same fragment and goal should return cached decision."""
-        from celeste_dag.core.evaluator import Evaluator, EvaluatorDecision
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         settings = EngineSettings(EVALUATOR_CACHE_ENABLED=True, EVALUATOR_CACHE_TTL_SECONDS=3600)
@@ -211,7 +211,7 @@ class TestEvaluatorCache:
     @pytest.mark.asyncio()
     async def test_evaluator_cache_miss_different_goal(self):
         """Same fragment with different goal should be a cache miss."""
-        from celeste_dag.core.evaluator import Evaluator, EvaluatorDecision
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         settings = EngineSettings(EVALUATOR_CACHE_ENABLED=True, EVALUATOR_CACHE_TTL_SECONDS=3600)
@@ -230,7 +230,7 @@ class TestEvaluatorCache:
     @pytest.mark.asyncio()
     async def test_evaluator_cache_disabled(self):
         """When cache is disabled, every call hits the LLM."""
-        from celeste_dag.core.evaluator import Evaluator
+        from celeste.core.evaluator import Evaluator
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         settings = EngineSettings(EVALUATOR_CACHE_ENABLED=False, EVALUATOR_CACHE_TTL_SECONDS=3600)
@@ -247,7 +247,7 @@ class TestEvaluatorCache:
     @pytest.mark.asyncio()
     async def test_evaluator_cache_expires(self):
         """Cached decision should expire after TTL."""
-        from celeste_dag.core.evaluator import Evaluator
+        from celeste.core.evaluator import Evaluator
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         settings = EngineSettings(EVALUATOR_CACHE_ENABLED=True, EVALUATOR_CACHE_TTL_SECONDS=0)
@@ -274,7 +274,7 @@ class TestEvaluatorPrompt:
     @pytest.mark.asyncio()
     async def test_evaluator_prompt_includes_goal(self):
         """The prompt sent to the LLM must include the goal."""
-        from celeste_dag.core.evaluator import Evaluator
+        from celeste.core.evaluator import Evaluator
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         evaluator = Evaluator(client)
@@ -291,7 +291,7 @@ class TestEvaluatorPrompt:
     @pytest.mark.asyncio()
     async def test_evaluator_prompt_includes_fragment(self):
         """The prompt sent to the LLM must include the fragment summary."""
-        from celeste_dag.core.evaluator import Evaluator
+        from celeste.core.evaluator import Evaluator
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         evaluator = Evaluator(client)
@@ -307,7 +307,7 @@ class TestEvaluatorPrompt:
     @pytest.mark.asyncio()
     async def test_evaluator_uses_low_temperature(self):
         """Evaluation should use temperature=0 for deterministic output."""
-        from celeste_dag.core.evaluator import Evaluator
+        from celeste.core.evaluator import Evaluator
 
         client = _StubLLMClient(response_content="DONE\nGoal achieved.")
         evaluator = Evaluator(client)

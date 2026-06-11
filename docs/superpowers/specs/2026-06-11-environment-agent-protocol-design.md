@@ -415,7 +415,7 @@ This prevents replay performance from degrading over time for long-running workf
 
 ```python
 # As a library (no server)
-from celeste_dag import Engine, EnvironmentAgent, LocalWorkspace
+from celeste import Engine, EnvironmentAgent, LocalWorkspace
 
 agent = EnvironmentAgent.in_process(
     workdir="/Users/tom/my-project",
@@ -457,7 +457,7 @@ The agent wraps `os.*`, `subprocess.*`, and `pathlib.*` behind its protocol. Zer
 
 ```python
 # Engine on server
-from celeste_dag import Engine, EnvironmentAgent
+from celeste import Engine, EnvironmentAgent
 
 agent = EnvironmentAgent.remote(
     url="ws://worker-3.internal:8080",
@@ -471,7 +471,7 @@ engine = Engine(agent=agent, settings=EngineSettings(
 
 ```python
 # Agent on target machine (separate process)
-from celeste_dag import EnvironmentAgent
+from celeste import EnvironmentAgent
 
 agent = EnvironmentAgent.serve(
     host="0.0.0.0",
@@ -504,7 +504,7 @@ For environments behind firewalls/NAT, the agent can run in **pull mode** — it
 
 ```python
 # Host application embeds Celeste-DAG
-from celeste_dag import Engine, EnvironmentAgent
+from celeste import Engine, EnvironmentAgent
 
 # Register host application's own tools
 agent = EnvironmentAgent.in_process(
@@ -594,16 +594,16 @@ This section lists every file that must be created or modified. A coding agent s
 
 | File | Classes / Functions | Phase |
 |------|---------------------|-------|
-| `src/celeste_dag/core/agent/__init__.py` | Module exports | 1 |
-| `src/celeste_dag/core/agent/agent.py` | `EnvironmentAgent` | 1 |
-| `src/celeste_dag/core/agent/driver.py` | `BaseDriver`, `ShellDriver`, `FilesystemDriver` | 1 |
-| `src/celeste_dag/core/agent/transport.py` | `BaseTransport`, `InProcessTransport` | 1 |
-| `src/celeste_dag/core/agent/transport_ws.py` | `WebSocketTransport`, `WebSocketServer` | 4 |
-| `src/celeste_dag/core/agent/transport_stdio.py` | `StdioTransport` | 1 |
-| `src/celeste_dag/core/opa_loop.py` | `OPALoop`, `WorkflowResult` | 2 |
-| `src/celeste_dag/core/evaluator.py` | `Evaluator`, `EvaluatorDecision` | 2 |
-| `src/celeste_dag/core/context_window.py` | `ContextWindowManager` | 2 |
-| `src/celeste_dag/core/exceptions.py` | `PlannerTimeoutError`, `SnapshotTimeoutError`, `ToolTimeoutError`, `PathTraversalError`, `AuthenticationError` | 1-2 |
+| `src/celeste/core/agent/__init__.py` | Module exports | 1 |
+| `src/celeste/core/agent/agent.py` | `EnvironmentAgent` | 1 |
+| `src/celeste/core/agent/driver.py` | `BaseDriver`, `ShellDriver`, `FilesystemDriver` | 1 |
+| `src/celeste/core/agent/transport.py` | `BaseTransport`, `InProcessTransport` | 1 |
+| `src/celeste/core/agent/transport_ws.py` | `WebSocketTransport`, `WebSocketServer` | 4 |
+| `src/celeste/core/agent/transport_stdio.py` | `StdioTransport` | 1 |
+| `src/celeste/core/opa_loop.py` | `OPALoop`, `WorkflowResult` | 2 |
+| `src/celeste/core/evaluator.py` | `Evaluator`, `EvaluatorDecision` | 2 |
+| `src/celeste/core/context_window.py` | `ContextWindowManager` | 2 |
+| `src/celeste/core/exceptions.py` | `PlannerTimeoutError`, `SnapshotTimeoutError`, `ToolTimeoutError`, `PathTraversalError`, `AuthenticationError` | 1-2 |
 | `tests/test_agent.py` | See TDD Test Plan — Phase 1 | 1 |
 | `tests/test_driver_interface.py` | See TDD Test Plan — Driver | 1 |
 | `tests/test_agent_transports.py` | See TDD Test Plan — Transports | 1+4 |
@@ -618,15 +618,15 @@ This section lists every file that must be created or modified. A coding agent s
 
 | File | Changes | Phase |
 |------|---------|-------|
-| `src/celeste_dag/core/engine.py` | Add `OPALoop` integration, `run()` method, delegate execution to `WorkflowExecutor` | 2 |
-| `src/celeste_dag/core/planner.py` | Add `observation` + `tool_schemas` params to `plan()`. Merge `DAGNode` models. | 2 |
-| `src/celeste_dag/database/models.py` | Add `WorkflowEvent` model, extend `EventType` enum | 3 |
-| `src/celeste_dag/toolkits/base.py` | Add `execute(name, args, driver)` abstract method to `BaseToolkit` | 1 |
-| `src/celeste_dag/toolkits/system_data.py` | Implement `execute()` for `read_file`, `list_directory`, `snapshot`, `run_command` | 1 |
-| `src/celeste_dag/toolkits/web_scraping.py` | Implement `execute()` for `http_get`, etc. | 1 |
-| `src/celeste_dag/toolkits/coding_vertical.py` | Implement `execute()` for coding-specific tools | 1 |
-| `src/celeste_dag/config/settings.py` | Add all new settings from Configuration Reference | 1-2 |
-| `src/celeste_dag/api/app.py` | Add `/agents/register`, `/agents/{id}/status` endpoints | 4 |
+| `src/celeste/core/engine.py` | Add `OPALoop` integration, `run()` method, delegate execution to `WorkflowExecutor` | 2 |
+| `src/celeste/core/planner.py` | Add `observation` + `tool_schemas` params to `plan()`. Merge `DAGNode` models. | 2 |
+| `src/celeste/database/models.py` | Add `WorkflowEvent` model, extend `EventType` enum | 3 |
+| `src/celeste/toolkits/base.py` | Add `execute(name, args, driver)` abstract method to `BaseToolkit` | 1 |
+| `src/celeste/toolkits/system_data.py` | Implement `execute()` for `read_file`, `list_directory`, `snapshot`, `run_command` | 1 |
+| `src/celeste/toolkits/web_scraping.py` | Implement `execute()` for `http_get`, etc. | 1 |
+| `src/celeste/toolkits/coding_vertical.py` | Implement `execute()` for coding-specific tools | 1 |
+| `src/celeste/config/settings.py` | Add all new settings from Configuration Reference | 1-2 |
+| `src/celeste/api/app.py` | Add `/agents/register`, `/agents/{id}/status` endpoints | 4 |
 | `tests/test_engine.py` | Rewrite for OPA loop behavior | 2 |
 | `tests/test_planner.py` | Add observation context tests | 2 |
 | `tests/test_toolkits.py` | Add execution tests via driver | 1 |
@@ -639,7 +639,7 @@ This section lists every file that must be created or modified. A coding agent s
 This is an additive evolution, not a rewrite. The existing 529 tests continue to pass.
 
 ### Phase 1: Environment Agent (Foundation)
-- Create `src/celeste_dag/core/agent/` module
+- Create `src/celeste/core/agent/` module
 - Implement `EnvironmentAgent` with in-process transport
 - Implement `BaseDriver`, `ShellDriver`, `FilesystemDriver`
 - Refactor `BaseToolkit` to add `execute(name, args, driver)` abstract method
@@ -695,7 +695,7 @@ This is an additive evolution, not a rewrite. The existing 529 tests continue to
 
 ## Configuration Reference
 
-All new settings are added to `EngineSettings` (`src/celeste_dag/config/settings.py`).
+All new settings are added to `EngineSettings` (`src/celeste/config/settings.py`).
 
 | Setting | Default | Description |
 |---------|---------|-------------|

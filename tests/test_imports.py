@@ -89,7 +89,7 @@ def test_dev_dependencies_importable(module_name: str) -> None:
 
 # --- Project package ---
 def test_project_package_importable() -> None:
-    """The celeste_dag package itself must be importable after install."""
-    import celeste_dag
+    """The celeste package itself must be importable after install."""
+    import celeste
 
-    assert celeste_dag is not None
+    assert celeste is not None

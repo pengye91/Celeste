@@ -2,15 +2,15 @@
 
 import pytest
 
-from celeste_dag.core.agent.agent import EnvironmentAgent
-from celeste_dag.core.exceptions import AuthenticationError
+from celeste.core.agent.agent import EnvironmentAgent
+from celeste.core.exceptions import AuthenticationError
 
 
 @pytest.mark.asyncio
 async def test_e2e_remote_agent_roundtrip():
     """EnvironmentAgent.remote should connect to a WebSocket server and call tools."""
     pytest.importorskip("websockets")
-    from celeste_dag.core.agent.transport_ws import WebSocketServer
+    from celeste.core.agent.transport_ws import WebSocketServer
 
     # Create a server-side agent
     server_agent = EnvironmentAgent.in_process(workdir=".")
@@ -40,7 +40,7 @@ async def test_e2e_remote_agent_roundtrip():
 async def test_e2e_remote_auth_failure():
     """EnvironmentAgent.remote should raise AuthenticationError with bad token."""
     pytest.importorskip("websockets")
-    from celeste_dag.core.agent.transport_ws import WebSocketServer
+    from celeste.core.agent.transport_ws import WebSocketServer
 
     server_agent = EnvironmentAgent.in_process(workdir=".")
     server = WebSocketServer(host="127.0.0.1", port=0, agent=server_agent, auth_token="secret")
@@ -60,7 +60,7 @@ async def test_e2e_remote_auth_failure():
 async def test_e2e_remote_reconnection():
     """Remote agent should auto-reconnect after server restart."""
     pytest.importorskip("websockets")
-    from celeste_dag.core.agent.transport_ws import WebSocketServer
+    from celeste.core.agent.transport_ws import WebSocketServer
 
     server_agent = EnvironmentAgent.in_process(workdir=".")
     server = WebSocketServer(host="127.0.0.1", port=0, agent=server_agent)
