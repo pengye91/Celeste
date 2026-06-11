@@ -104,11 +104,13 @@ class _StubPlanner:
         history: list[dict] | None = None,
         timeout_ms: int = 60000,
     ) -> DAGFragment:
+        # Snapshot the history so later mutations in OPALoop.run() do not affect
+        # the recorded plan call.
         self.plan_calls.append({
             "goal": goal,
             "observation": observation,
             "tool_schemas": tool_schemas,
-            "history": history,
+            "history": list(history) if history is not None else history,
             "timeout_ms": timeout_ms,
         })
         if self._side_effect is not None:
@@ -455,6 +457,87 @@ async def test_opa_loop_token_budget_exceeded():
     assert isinstance(result, WorkflowResult)
     assert result.status == "escalated"
     assert result.reason == "token_budget_exceeded"
+
+
+# ===========================================================================
+# History truncation
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_history_truncated():
+    """History is truncated and summarized once it exceeds OPA_HISTORY_MAX_CYCLES."""
+    from celeste.core.opa_loop import OPALoop
+
+    agent = _StubAgent(snapshot_result={"files": {}})
+    fragments = [
+        _make_fragment(nodes=[_make_tool_node(f"step{i}")], goal_achieved=False)
+        for i in range(5)
+    ]
+    planner = _StubPlanner(fragments=fragments)
+    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 4 + [EvaluatorDecision.DONE])
+
+    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    await loop.run(goal="history truncation test")
+
+    # Planner should receive at most max_cycles full entries plus one summary block.
+    # With 5 cycles and max=3, we expect 1 summary block + 3 full entries = 4.
+    final_history = planner.plan_calls[-1]["history"]
+    assert len(final_history) <= 4
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_history_summary_present():
+    """Old cycles are summarized into a summary block, not dropped."""
+    from celeste.core.opa_loop import OPALoop
+
+    agent = _StubAgent(snapshot_result={"files": {}})
+    fragments = [
+        _make_fragment(nodes=[_make_tool_node(f"step{i}")], goal_achieved=False)
+        for i in range(5)
+    ]
+    planner = _StubPlanner(fragments=fragments)
+    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 4 + [EvaluatorDecision.DONE])
+
+    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    await loop.run(goal="history summary test")
+
+    final_history = planner.plan_calls[-1]["history"]
+    summary_blocks = [entry for entry in final_history if entry.get("_summary")]
+    assert len(summary_blocks) >= 1
+    summary_entries = summary_blocks[0].get("entries", [])
+    assert len(summary_entries) >= 1
+    for entry in summary_entries:
+        assert "cycle" in entry
+        assert "decision" in entry
+        assert "completed_nodes" in entry
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_history_zero_max():
+    """With OPA_HISTORY_MAX_CYCLES=0, all old cycles are summarized."""
+    from celeste.core.opa_loop import OPALoop
+
+    agent = _StubAgent(snapshot_result={"files": {}})
+    fragments = [
+        _make_fragment(nodes=[_make_tool_node(f"step{i}")], goal_achieved=False)
+        for i in range(3)
+    ]
+    planner = _StubPlanner(fragments=fragments)
+    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 2 + [EvaluatorDecision.DONE])
+
+    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=0, MAX_OPA_CYCLES=10)
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    await loop.run(goal="history zero max test")
+
+    # Examine the history passed to the planner on the final planning call.
+    final_history = planner.plan_calls[-1]["history"]
+    # With max=0, every entry older than the current cycle is summarized. The
+    # current cycle has not yet been appended when the planner is called, so the
+    # planner history should contain only summary blocks (no full entries).
+    assert all(entry.get("_summary") for entry in final_history)
 
 
 @pytest.mark.asyncio

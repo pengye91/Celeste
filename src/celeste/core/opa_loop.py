@@ -154,7 +154,50 @@ class OPALoop:
         self._settings = settings or get_settings()
         self._executor = WorkflowExecutor(agent)
 
-    # -- public API ---------------------------------------------------------
+    def _summarize_history_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """Compress a full history entry into a minimal summary."""
+        if entry.get("_summary"):
+            # Already a summary block; keep it as-is.
+            return entry
+        return {
+            "cycle": entry["cycle"],
+            "decision": entry["decision"],
+            "completed_nodes": len(entry["execution"].get("completed", [])),
+            "failed_nodes": len(entry["execution"].get("failed", [])),
+            "token_estimate": entry.get("token_estimate", 0),
+        }
+
+    def _maybe_summarize_history(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep the last N full cycles; summarize older cycles into a summary block.
+
+        The summary block is stored as a single entry at the front of the history
+        list so the planner still receives chronological context without unbounded
+        memory growth.
+        """
+        max_full = self._settings.OPA_HISTORY_MAX_CYCLES
+        if max_full < 0:
+            max_full = 0
+
+        if len(history) <= max_full:
+            return history
+
+        # Partition: oldest entries become summaries; newest remain full.
+        # The summary block itself counts toward the budget, so keep at most
+        # max_full - 1 full entries when a summary block is present.
+        # When max_full is 0, all prior full entries are summarized and the
+        # planner receives only the summary block.
+        full_slots = max(0, max_full - 1) if max_full > 0 else 0
+        to_summarize = history[: len(history) - full_slots]
+        keep_full = history[len(history) - full_slots :]
+
+        summaries: list[dict[str, Any]] = []
+        for entry in to_summarize:
+            if entry.get("_summary"):
+                summaries.extend(entry.get("entries", []))
+            else:
+                summaries.append(self._summarize_history_entry(entry))
+
+        return [{"_summary": True, "entries": summaries}] + keep_full
 
     async def run(
         self,
@@ -258,6 +301,12 @@ class OPALoop:
                 "decision": decision.name if hasattr(decision, "name") else str(decision),
                 "decision_reason": getattr(decision, "reason", ""),
             })
+
+            # Truncate/summarize history to bound memory usage. We reassign to a
+            # new list so that any references held by the planner (e.g. test stubs
+            # recording the passed-in history) see the state at plan time rather
+            # than a later mutation.
+            history = self._maybe_summarize_history(history)
 
             # Check if planner signaled goal achieved
             if getattr(fragment, "goal_achieved", False):

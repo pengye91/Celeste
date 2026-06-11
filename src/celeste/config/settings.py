@@ -49,6 +49,7 @@ class EngineSettings(BaseSettings):
     PLANNER_MAX_RETRIES: int = 2
     MAX_OPA_CYCLES: int = 100
     MAX_LLM_TOKENS: int = 50000
+    OPA_HISTORY_MAX_CYCLES: int = 5
     EVALUATOR_CACHE_ENABLED: bool = True
     EVALUATOR_CACHE_TTL_SECONDS: int = 3600
 
@@ -71,6 +72,13 @@ class EngineSettings(BaseSettings):
     def _validate_max_llm_tokens(cls, v: int) -> int:
         if v < 1000:
             raise ValueError("MAX_LLM_TOKENS must be >= 1000")
+        return v
+
+    @field_validator("OPA_HISTORY_MAX_CYCLES")
+    @classmethod
+    def _validate_opa_history_max_cycles(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("OPA_HISTORY_MAX_CYCLES must be >= 0")
         return v
 
     @field_validator("PLANNER_MAX_RETRIES")
