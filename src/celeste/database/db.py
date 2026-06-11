@@ -134,8 +134,20 @@ async def init_db(
     """
     global _engine, _async_session_factory
 
+    target_url = None
+    if settings is not None:
+        target_url = settings.DATABASE_URL.get_secret_value()
+    elif url is not None:
+        target_url = url
+
     if _engine is not None:
-        return _engine
+        current_url = str(_engine.url)
+        if current_url == target_url:
+            return _engine
+        # URL changed — dispose old engine and recreate
+        await _engine.dispose()
+        _engine = None
+        _async_session_factory = None
 
     if settings is not None:
         _engine = create_engine_from_settings(settings)
