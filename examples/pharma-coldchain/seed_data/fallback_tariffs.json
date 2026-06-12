@@ -1,0 +1,60 @@
+{
+  "NG": {
+    "country": "NG",
+    "rules": [
+      {"rule": "GDP Certificate required", "code": "NG-GDP-001"},
+      {"rule": "NAFDAC import permit required", "code": "NG-IMP-001"},
+      {"rule": "Temperature log mandatory", "code": "NG-TEMP-001"},
+      {"rule": "Fumigation certificate required", "code": "NG-FUM-001"}
+    ],
+    "tariff_pct": 5.0,
+    "cached": true
+  },
+  "KE": {
+    "country": "KE",
+    "rules": [
+      {"rule": "Import permit required", "code": "KE-IMP-001"},
+      {"rule": "Pre-shipment inspection certificate", "code": "KE-INS-001"},
+      {"rule": "Temperature log mandatory", "code": "KE-TEMP-001"}
+    ],
+    "tariff_pct": 2.5,
+    "cached": true
+  },
+  "IN": {
+    "country": "IN",
+    "rules": [
+      {"rule": "CDSCO import license required", "code": "IN-IMP-001"},
+      {"rule": "Batch testing at CDL Kolkata", "code": "IN-TEST-001"},
+      {"rule": "Temperature log mandatory", "code": "IN-TEMP-001"}
+    ],
+    "tariff_pct": 10.0,
+    "cached": true
+  },
+  "DE": {
+    "country": "DE",
+    "rules": [
+      {"rule": "GDP Certificate required (AMG Section 13)", "code": "DE-GDP-001"},
+      {"rule": "Temperature log mandatory", "code": "DE-TEMP-001"}
+    ],
+    "tariff_pct": 0.0,
+    "cached": true
+  },
+  "FR": {
+    "country": "FR",
+    "rules": [
+      {"rule": "GDP Certificate required (ANSM)", "code": "FR-GDP-001"},
+      {"rule": "Temperature log mandatory", "code": "FR-TEMP-001"}
+    ],
+    "tariff_pct": 0.0,
+    "cached": true
+  },
+  "NL": {
+    "country": "NL",
+    "rules": [
+      {"rule": "GDP Certificate required (Annex 16)", "code": "NL-GDP-001"},
+      {"rule": "Temperature log mandatory", "code": "NL-TEMP-001"}
+    ],
+    "tariff_pct": 0.0,
+    "cached": true
+  }
+}

@@ -29,6 +29,7 @@ from celeste.config.settings import EngineSettings
 from celeste.core.evaluator import EvaluatorDecision
 from celeste.core.exceptions import PlannerTimeoutError
 from celeste.core.planner import DAGFragment, DAGNode
+from sqlalchemy import select
 
 
 # ---------------------------------------------------------------------------
@@ -104,11 +105,13 @@ class _StubPlanner:
         history: list[dict] | None = None,
         timeout_ms: int = 60000,
     ) -> DAGFragment:
+        # Snapshot the history so later mutations in OPALoop.run() do not affect
+        # the recorded plan call.
         self.plan_calls.append({
             "goal": goal,
             "observation": observation,
             "tool_schemas": tool_schemas,
-            "history": history,
+            "history": list(history) if history is not None else history,
             "timeout_ms": timeout_ms,
         })
         if self._side_effect is not None:
@@ -457,26 +460,129 @@ async def test_opa_loop_token_budget_exceeded():
     assert result.reason == "token_budget_exceeded"
 
 
+# ===========================================================================
+# History truncation
+# ===========================================================================
+
+
 @pytest.mark.asyncio
-async def test_opa_loop_evaluator_returns_escalate():
-    """Evaluator returning ESCALATE returns escalated WorkflowResult with reason."""
-    from celeste.core.opa_loop import OPALoop, WorkflowResult
+async def test_opa_loop_history_truncated():
+    """History is truncated and summarized once it exceeds OPA_HISTORY_MAX_CYCLES."""
+    from celeste.core.opa_loop import OPALoop
 
     agent = _StubAgent(snapshot_result={"files": {}})
-    fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
-    planner = _StubPlanner(fragments=[fragment])
+    fragments = [
+        _make_fragment(nodes=[_make_tool_node(f"step{i}")], goal_achieved=False)
+        for i in range(5)
+    ]
+    planner = _StubPlanner(fragments=fragments)
+    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 4 + [EvaluatorDecision.DONE])
 
-    escalate_decision = EvaluatorDecision.ESCALATE
-    escalate_decision.reason = "ambiguous goal"
-    evaluator = _StubEvaluator(decisions=[escalate_decision])
+    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    await loop.run(goal="history truncation test")
 
-    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator)
-    result = await loop.run(goal="escalate test")
+    # Planner should receive at most max_cycles full entries plus one summary block.
+    # With 5 cycles and max=3, we expect 1 summary block + 3 full entries = 4.
+    final_history = planner.plan_calls[-1]["history"]
+    assert len(final_history) <= 4
 
-    assert isinstance(result, WorkflowResult)
-    assert result.status == "escalated"
-    assert result.reason == "ambiguous goal"
-    assert result.cycle_count == 1
+
+@pytest.mark.asyncio
+async def test_opa_loop_history_summary_present():
+    """Old cycles are summarized into a summary block, not dropped."""
+    from celeste.core.opa_loop import OPALoop
+
+    agent = _StubAgent(snapshot_result={"files": {}})
+    fragments = [
+        _make_fragment(nodes=[_make_tool_node(f"step{i}")], goal_achieved=False)
+        for i in range(5)
+    ]
+    planner = _StubPlanner(fragments=fragments)
+    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 4 + [EvaluatorDecision.DONE])
+
+    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    await loop.run(goal="history summary test")
+
+    final_history = planner.plan_calls[-1]["history"]
+    summary_blocks = [entry for entry in final_history if entry.get("_summary")]
+    assert len(summary_blocks) >= 1
+    summary_entries = summary_blocks[0].get("entries", [])
+    assert len(summary_entries) >= 1
+    for entry in summary_entries:
+        assert "cycle" in entry
+        assert "decision" in entry
+        assert "completed_nodes" in entry
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_history_zero_max():
+    """With OPA_HISTORY_MAX_CYCLES=0, all old cycles are summarized."""
+    from celeste.core.opa_loop import OPALoop
+
+    agent = _StubAgent(snapshot_result={"files": {}})
+    fragments = [
+        _make_fragment(nodes=[_make_tool_node(f"step{i}")], goal_achieved=False)
+        for i in range(3)
+    ]
+    planner = _StubPlanner(fragments=fragments)
+    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 2 + [EvaluatorDecision.DONE])
+
+    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=0, MAX_OPA_CYCLES=10)
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    await loop.run(goal="history zero max test")
+
+    # Examine the history passed to the planner on the final planning call.
+    final_history = planner.plan_calls[-1]["history"]
+    # With max=0, every entry older than the current cycle is summarized. The
+    # current cycle has not yet been appended when the planner is called, so the
+    # planner history should contain only summary blocks (no full entries).
+    assert all(entry.get("_summary") for entry in final_history)
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_evaluator_returns_escalate():
+    """Evaluator returning ESCALATE pauses workflow and returns paused WorkflowResult with reason."""
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        planner = _StubPlanner(fragments=[fragment])
+
+        escalate_decision = EvaluatorDecision.ESCALATE
+        escalate_decision.reason = "ambiguous goal"
+        evaluator = _StubEvaluator(decisions=[escalate_decision])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.run(goal="escalate test")
+
+        assert isinstance(result, WorkflowResult)
+        assert result.status == "paused"
+        assert result.reason == "ambiguous goal"
+        assert result.cycle_count == 1
+        assert result.workflow_id is not None
+
+        async with get_session() as session:
+            wf_result = await session.execute(
+                select(Workflow).where(Workflow.id == result.workflow_id)
+            )
+            workflow = wf_result.scalar_one()
+            assert workflow.status == WorkflowStatus.PAUSED
+            assert workflow.paused_at is not None
+            assert workflow.dag_definition.get("_opa_state") is not None
+    finally:
+        await close_db()
 
 
 # ===========================================================================
@@ -758,3 +864,313 @@ async def test_opa_loop_run_overrides_max_llm_tokens():
     assert isinstance(result, WorkflowResult)
     assert result.status == "escalated"
     assert result.reason == "token_budget_exceeded"
+
+
+# ===========================================================================
+# Workflow persistence and event emission
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_creates_workflow_record():
+    """OPALoop.run() persists a Workflow record with status RUNNING and TaskNode rows."""
+    from celeste.core.opa_loop import OPALoop
+    from celeste.database.db import get_session, init_db
+    from celeste.database.models import TaskNode, Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment = _make_fragment(
+            nodes=[_make_tool_node("step1", command="cmd_a")],
+            goal_achieved=True,
+        )
+        planner = _StubPlanner(fragments=[fragment])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        await loop.run(goal="persisted goal")
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "persisted goal")
+            )
+            workflow = result.scalar_one()
+            assert workflow.status == WorkflowStatus.COMPLETED
+
+            result = await session.execute(
+                select(TaskNode).where(TaskNode.workflow_id == workflow.id)
+            )
+            nodes = result.scalars().all()
+            assert len(nodes) == 1
+            assert nodes[0].name == "step1"
+    finally:
+        from celeste.database.db import close_db
+
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_emits_workflow_events():
+    """Each OPA cycle writes CYCLE_STARTED, OBSERVATION_CAPTURED, PLAN_GENERATED, and EVALUATION_RESULT WorkflowEvent rows."""
+    from celeste.core.opa_loop import OPALoop
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import TaskEventType, Workflow, WorkflowEvent
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment1 = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        fragment2 = _make_fragment(nodes=[_make_tool_node("step2")], goal_achieved=True)
+        planner = _StubPlanner(fragments=[fragment1, fragment2])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE, EvaluatorDecision.DONE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        await loop.run(goal="evented goal")
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "evented goal")
+            )
+            workflow = result.scalar_one()
+
+            result = await session.execute(
+                select(WorkflowEvent)
+                .where(WorkflowEvent.workflow_id == workflow.id)
+                .order_by(WorkflowEvent.sequence_number)
+            )
+            events = result.scalars().all()
+            types = [e.event_type for e in events]
+
+            assert types.count(TaskEventType.CYCLE_STARTED) >= 2
+            assert types.count(TaskEventType.OBSERVATION_CAPTURED) >= 2
+            assert types.count(TaskEventType.PLAN_GENERATED) >= 2
+            assert types.count(TaskEventType.EVALUATION_RESULT) >= 2
+
+            # Sequence numbers should be monotonically assigned per workflow.
+            seqs = [e.sequence_number for e in events]
+            assert all(isinstance(s, int) for s in seqs)
+            assert seqs == sorted(seqs)
+    finally:
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_compensates_on_failure():
+    """When a node fails and compensation commands exist, OPALoop triggers compensation and records COMPENSATION_* events."""
+    from celeste.core.opa_loop import OPALoop
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import TaskEvent, TaskEventType, Workflow
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+
+        async def failing_call_tool(name: str, arguments: dict[str, Any] | None = None, timeout_ms: int | None = None) -> dict[str, Any]:
+            if name == "fail_cmd":
+                return {"error": "boom"}
+            return {"success": True}
+
+        agent.call_tool = failing_call_tool
+
+        node1 = _make_tool_node("n1", command="ok_cmd")
+        node1.compensation_command = "undo_n1"
+        node1.compensation_arguments = {"action": "undo"}
+        node2 = _make_tool_node("n2", command="fail_cmd")
+        node2.dependencies = ["n1"]
+
+        fragment = _make_fragment(nodes=[node1, node2], goal_achieved=False)
+        planner = _StubPlanner(fragments=[fragment])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.run(goal="saga goal", max_cycles=3)
+
+        assert result.status == "failed"
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "saga goal")
+            )
+            workflow = result.scalar_one()
+            assert workflow.status.value == "failed"
+
+            result = await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.workflow_id == workflow.id,
+                    TaskEvent.event_type == TaskEventType.COMPENSATION_TRIGGERED,
+                )
+            )
+            assert len(result.scalars().all()) == 1
+
+            result = await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.workflow_id == workflow.id,
+                    TaskEvent.event_type == TaskEventType.COMPENSATION_COMPLETED,
+                )
+            )
+            assert len(result.scalars().all()) == 1
+    finally:
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_max_cycles_exceeded():
+    """Exceeding MAX_OPA_CYCLES returns escalated WorkflowResult and persists a workflow record."""
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=5,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        planner = _StubPlanner(fragments=[fragment])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.run(goal="max cycles persisted")
+
+        assert isinstance(result, WorkflowResult)
+        assert result.status == "escalated"
+        assert result.reason == "max_cycles_exceeded"
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "max cycles persisted")
+            )
+            workflow = result.scalar_one()
+            assert workflow.status == WorkflowStatus.RUNNING
+    finally:
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_token_budget_exceeded():
+    """Exceeding MAX_LLM_TOKENS returns escalated WorkflowResult and persists a workflow record."""
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=100,
+        MAX_LLM_TOKENS=1000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        planner = _StubPlanner(fragments=[fragment])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.run(goal="token budget persisted")
+
+        assert isinstance(result, WorkflowResult)
+        assert result.status == "escalated"
+        assert result.reason == "token_budget_exceeded"
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "token budget persisted")
+            )
+            workflow = result.scalar_one()
+            assert workflow.status == WorkflowStatus.RUNNING
+    finally:
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_resume_from_paused():
+    """Resume a paused workflow with human input and continue to completion."""
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus, WorkflowEvent, TaskEventType
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment1 = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        fragment2 = _make_fragment(nodes=[_make_tool_node("step2")], goal_achieved=True)
+        planner = _StubPlanner(fragments=[fragment1, fragment2])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.ESCALATE, EvaluatorDecision.DONE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.run(goal="resume test")
+
+        assert result.status == "paused"
+        workflow_id = result.workflow_id
+        assert workflow_id is not None
+
+        async with get_session() as session:
+            wf_result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            workflow = wf_result.scalar_one()
+            assert workflow.status == WorkflowStatus.PAUSED
+
+        # Resume with human input
+        resume_result = await loop.resume(workflow_id, "human guidance")
+
+        assert resume_result.status == "completed"
+        assert resume_result.workflow_id == workflow_id
+
+        async with get_session() as session:
+            wf_result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            workflow = wf_result.scalar_one()
+            assert workflow.status == WorkflowStatus.COMPLETED
+            assert workflow.human_input == "human guidance"
+            assert workflow.paused_at is None
+
+            # Verify HUMAN_INPUT_RECEIVED and WORKFLOW_RESUMED events
+            evt_result = await session.execute(
+                select(WorkflowEvent).where(
+                    WorkflowEvent.workflow_id == workflow_id,
+                    WorkflowEvent.event_type == TaskEventType.HUMAN_INPUT_RECEIVED,
+                )
+            )
+            assert len(evt_result.scalars().all()) == 1
+
+            evt_result = await session.execute(
+                select(WorkflowEvent).where(
+                    WorkflowEvent.workflow_id == workflow_id,
+                    WorkflowEvent.event_type == TaskEventType.WORKFLOW_RESUMED,
+                )
+            )
+            assert len(evt_result.scalars().all()) == 1
+    finally:
+        await close_db()

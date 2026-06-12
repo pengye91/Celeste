@@ -45,6 +45,7 @@ from celeste.api.schemas import (
     NodeStatusResponse,
     EventResponse,
     ErrorResponse,
+    ResumeWorkflowRequest,
     RegisterAgentRequest,
     RegisterAgentResponse,
     AgentStatusResponse,
@@ -458,6 +459,34 @@ def create_app(
             wf.status = WorkflowStatus.CANCELLED
 
         return WorkflowResponse(workflow_id=workflow_id, status="cancelled")
+
+    # ------------------------------------------------------------------
+    # POST /api/workflows/{workflow_id}/resume
+    # ------------------------------------------------------------------
+
+    @app.post(
+        "/api/workflows/{workflow_id}/resume",
+        response_model=WorkflowResponse,
+        tags=["workflows"],
+    )
+    async def resume_workflow(workflow_id: str, body: ResumeWorkflowRequest):
+        """Resume a paused workflow with human input."""
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+
+        try:
+            result = await engine.resume_workflow(wf_uuid, body.human_input)
+        except ValueError as exc:
+            detail = str(exc)
+            if "not found" in detail:
+                raise HTTPException(status_code=404, detail=detail)
+            if "not paused" in detail:
+                raise HTTPException(status_code=409, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
+
+        return WorkflowResponse(workflow_id=workflow_id, status=result.status)
 
     # ------------------------------------------------------------------
     # Agent management endpoints

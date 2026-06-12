@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Enum, String, Text, ForeignKey, Integer
+from sqlalchemy import JSON, Enum, String, Text, ForeignKey, Integer, Index
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -56,6 +56,7 @@ class WorkflowStatus(str, enum.Enum):
 
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -81,6 +82,19 @@ class TaskEventType(str, enum.Enum):
     PRECONDITION_CHECKED = "precondition_checked"
     CYCLE_STARTED = "cycle_started"
     CHECKPOINT = "checkpoint"
+
+    # Human-in-the-loop event types
+    ESCALATE = "escalate"
+    WORKFLOW_PAUSED = "workflow_paused"
+    HUMAN_INPUT_RECEIVED = "human_input_received"
+    WORKFLOW_RESUMED = "workflow_resumed"
+
+    # Security audit event type
+    SECURITY_AUDIT = "security_audit"
+
+    # Workspace lifecycle event types
+    WORKSPACE_SPAWN = "workspace_spawn"
+    WORKSPACE_DESTROY = "workspace_destroy"
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +146,8 @@ class Workflow(Base):
         default=_utcnow,
         onupdate=_utcnow,
     )
+    human_input: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     # Relationships
     task_nodes: Mapped[list["TaskNode"]] = relationship(
@@ -245,6 +261,10 @@ class TaskEvent(Base):
 
     __tablename__ = "task_events"
 
+    __table_args__ = (
+        Index("idx_task_events_wf_type", "workflow_id", "event_type"),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True,
         default=uuid.uuid4,
@@ -302,6 +322,10 @@ class WorkflowEvent(Base):
     """
 
     __tablename__ = "workflow_events"
+
+    __table_args__ = (
+        Index("idx_workflow_events_wf_type", "workflow_id", "event_type"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True,
