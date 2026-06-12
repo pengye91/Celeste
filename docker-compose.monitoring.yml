@@ -1,0 +1,34 @@
+# docker-compose.monitoring.yml
+#
+# CMC monitoring UI override.
+#
+# Usage with the parent Celeste API service (recommended):
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up
+#
+# Usage standalone (against an existing Celeste API URL):
+#   NEXT_PUBLIC_CELESTE_API_URL=https://celeste.example.com \
+#     docker compose -f docker-compose.monitoring.yml up
+
+services:
+  monitoring:
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile
+    image: celeste-mission-control:latest
+    container_name: celeste-mission-control
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # The parent Celeste API service is conventionally named `celeste`
+      # or `api`; if you do not have a compose service for it, set this
+      # to a real URL (e.g. https://celeste.example.com) before starting.
+      NEXT_PUBLIC_CELESTE_API_URL: ${NEXT_PUBLIC_CELESTE_API_URL:-http://celeste:8000}
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
