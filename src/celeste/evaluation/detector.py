@@ -246,31 +246,46 @@ class FeatureDetector:
     # ------------------------------------------------------------------
 
     async def detect_security(self, workflow_id: str) -> SecurityEvidence:
-        """Look for SECURITY_AUDIT or audit-related events."""
-        # The event log does not yet have a SECURITY_AUDIT event type.
-        # We look for blocked calls indirectly via NODE_FAILED with audit data.
+        """Look for SECURITY_AUDIT events in WorkflowEvent ledger."""
+        wf_id = self._wf_id(workflow_id)
+
         async with get_session() as session:
             result = await session.execute(
-                select(TaskEvent)
+                select(WorkflowEvent)
                 .where(
-                    TaskEvent.workflow_id == self._wf_id(workflow_id),
+                    WorkflowEvent.workflow_id == wf_id,
+                    WorkflowEvent.event_type == TaskEventType.SECURITY_AUDIT,
                 )
             )
-            events = result.scalars().all()
+            audit_events = result.scalars().all()
 
-        # Count mutating calls (heuristic: commands containing UPDATE, DELETE, INSERT, DROP)
-        mutating = [
-            e for e in events
-            if e.event_data and isinstance(e.event_data, dict)
-            and any(kw in str(e.event_data).upper() for kw in ["UPDATE", "DELETE", "INSERT", "DROP"])
-        ]
+        if not audit_events:
+            # No audit instrumentation was present for this workflow run.
+            return SecurityEvidence(
+                audit_coverage_percent=0.0,
+                blocked_count=0,
+                missing_audit_count=0,
+                error="no SECURITY_AUDIT events found -- auditor not wired",
+            )
 
-        # Since we don't have explicit SECURITY_AUDIT events yet, report degraded confidence
+        blocked_count = 0
+        safe_count = 0
+
+        for event in audit_events:
+            data = event.event_data or {}
+            is_safe = data.get("is_safe", True)
+            if is_safe:
+                safe_count += 1
+            else:
+                blocked_count += 1
+
+        total = len(audit_events)
+        coverage = (safe_count / total) * 100.0 if total > 0 else 0.0
+
         return SecurityEvidence(
-            audit_coverage_percent=0.0,
-            blocked_count=0,
-            missing_audit_count=len(mutating),
-            error="security audit events not yet instrumented in event log",
+            audit_coverage_percent=round(coverage, 2),
+            blocked_count=blocked_count,
+            missing_audit_count=0,
         )
 
     # ------------------------------------------------------------------

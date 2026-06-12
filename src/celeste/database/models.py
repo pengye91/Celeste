@@ -89,6 +89,9 @@ class TaskEventType(str, enum.Enum):
     HUMAN_INPUT_RECEIVED = "human_input_received"
     WORKFLOW_RESUMED = "workflow_resumed"
 
+    # Security audit event type
+    SECURITY_AUDIT = "security_audit"
+
 
 # ---------------------------------------------------------------------------
 # Helpers

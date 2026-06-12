@@ -71,8 +71,9 @@ class WorkflowExecutor:
     dependencies. Each node is invoked via agent.call_tool().
     """
 
-    def __init__(self, agent: Any) -> None:
+    def __init__(self, agent: Any, security_auditor: Any = None) -> None:
         self._agent = agent
+        self._security_auditor = security_auditor
 
     async def execute_fragment(self, fragment: DAGFragment) -> dict[str, Any]:
         """Execute all nodes in the fragment sequentially.
@@ -81,10 +82,13 @@ class WorkflowExecutor:
             - completed: list of node names that succeeded
             - failed: list of node names that failed
             - skipped: list of node names skipped due to failed dependencies
+            - audit_results: list of audit verdict dicts (when security_auditor is set)
         """
         completed: list[str] = []
         failed: list[str] = []
         skipped: list[str] = []
+        security_blocked: list[str] = []
+        audit_results: list[dict[str, Any]] = []
 
         # Build a map of node name -> node
         node_map = {node.name: node for node in fragment.nodes}
@@ -118,6 +122,30 @@ class WorkflowExecutor:
                     executed.add(name)
                     continue
 
+                # --- Security audit before execution ---
+                verdict = None
+                if self._security_auditor is not None:
+                    verdict = self._security_auditor.audit_tool_call(
+                        node.command,
+                        node.arguments,
+                    )
+
+                    audit_results.append({
+                        "node_name": name,
+                        "tool_name": node.command,
+                        "arguments": node.arguments,
+                        "is_safe": verdict.is_safe if verdict else True,
+                        "risk_level": verdict.risk_level if verdict else "safe",
+                        "reason": verdict.reason if verdict else "No auditor configured",
+                        "detected_threats": list(verdict.detected_threats) if verdict else [],
+                    })
+
+                if verdict is not None and not verdict.is_safe:
+                    security_blocked.append(name)
+                    failed.append(name)
+                    executed.add(name)
+                    continue
+
                 try:
                     result = await self._agent.call_tool(
                         node.command,
@@ -136,6 +164,8 @@ class WorkflowExecutor:
             "completed": completed,
             "failed": failed,
             "skipped": skipped,
+            "security_blocked": security_blocked,
+            "audit_results": audit_results,
         }
 
 
@@ -162,12 +192,14 @@ class OPALoop:
         planner: Planner,
         evaluator: Evaluator,
         settings: EngineSettings | None = None,
+        security_auditor: Any = None,
     ) -> None:
         self._agent = agent
         self._planner = planner
         self._evaluator = evaluator
         self._settings = settings or get_settings()
-        self._executor = WorkflowExecutor(agent)
+        self._security_auditor = security_auditor
+        self._executor = WorkflowExecutor(agent, security_auditor=security_auditor)
 
     def _summarize_history_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
         """Compress a full history entry into a minimal summary."""
@@ -354,6 +386,24 @@ class OPALoop:
             # -- 3. ACT -------------------------------------------------------
             # Tier 1: retry transient failures
             exec_result = await self._execute_with_retries(fragment)
+
+            # Emit SECURITY_AUDIT events for each audited tool call.
+            for audit in exec_result.get("audit_results", []):
+                seq += 1
+                await self._emit_workflow_event(
+                    workflow_id,
+                    TaskEventType.SECURITY_AUDIT,
+                    {
+                        "node_name": audit.get("node_name"),
+                        "tool_name": audit.get("tool_name"),
+                        "arguments": audit.get("arguments"),
+                        "is_safe": audit.get("is_safe"),
+                        "risk_level": audit.get("risk_level"),
+                        "reason": audit.get("reason"),
+                        "detected_threats": audit.get("detected_threats", []),
+                    },
+                    seq,
+                )
 
             # Update tracking sets from execution result.
             completed_node_names.update(exec_result.get("completed", []))
@@ -720,6 +770,25 @@ class OPALoop:
             await self._persist_fragment(workflow_id, fragment)
 
             exec_result = await self._execute_with_retries(fragment)
+
+            # Emit SECURITY_AUDIT events for each audited tool call.
+            for audit in exec_result.get("audit_results", []):
+                seq += 1
+                await self._emit_workflow_event(
+                    workflow_id,
+                    TaskEventType.SECURITY_AUDIT,
+                    {
+                        "node_name": audit.get("node_name"),
+                        "tool_name": audit.get("tool_name"),
+                        "arguments": audit.get("arguments"),
+                        "is_safe": audit.get("is_safe"),
+                        "risk_level": audit.get("risk_level"),
+                        "reason": audit.get("reason"),
+                        "detected_threats": audit.get("detected_threats", []),
+                    },
+                    seq,
+                )
+
             completed_node_names: set[str] = set()
             failed_node_names: set[str] = set()
             completed_node_names.update(exec_result.get("completed", []))
@@ -946,6 +1015,7 @@ class OPALoop:
         """
         accumulated_completed: list[str] = []
         accumulated_skipped: list[str] = []
+        accumulated_audit: list[dict[str, Any]] = []
         original_fragment = fragment
 
         for attempt in range(max_retries + 1):
@@ -954,30 +1024,32 @@ class OPALoop:
             # Accumulate successes and skips from this attempt.
             accumulated_completed.extend(exec_result.get("completed", []))
             accumulated_skipped.extend(exec_result.get("skipped", []))
+            accumulated_audit.extend(exec_result.get("audit_results", []))
 
             # Check for transient failures
             failed_nodes = exec_result.get("failed", [])
+            security_blocked = exec_result.get("security_blocked", [])
             if not failed_nodes:
                 return {
                     "completed": list(dict.fromkeys(accumulated_completed)),
                     "failed": [],
                     "skipped": list(dict.fromkeys(accumulated_skipped)),
+                    "audit_results": accumulated_audit,
                 }
 
-            # Check if failures are retryable (all have retryable flag)
-            all_retryable = True
-            for node in fragment.nodes:
-                if node.name in failed_nodes:
-                    # For this implementation, we assume retryable unless
-                    # explicitly marked otherwise. In a real system, the
-                    # agent/tool would indicate retryability.
-                    pass
+            # Security-blocked nodes are not retryable (they are deterministic
+            # blocks, not transient failures).
+            retryable_failures = [
+                n for n in failed_nodes if n not in security_blocked
+            ]
 
-            if not all_retryable or attempt >= max_retries:
+            # If all failures are security blocks, stop retrying.
+            if not retryable_failures or attempt >= max_retries:
                 return {
                     "completed": list(dict.fromkeys(accumulated_completed)),
                     "failed": failed_nodes,
                     "skipped": list(dict.fromkeys(accumulated_skipped)),
+                    "audit_results": accumulated_audit,
                 }
 
             # Exponential backoff: 1s, 2s, 4s
@@ -985,12 +1057,13 @@ class OPALoop:
             logger.info("Tier 1 retry: waiting %ds before retry %d/%d", backoff, attempt + 1, max_retries)
             await asyncio.sleep(backoff)
 
-            # Rebuild fragment with only failed nodes for retry.
+            # Rebuild fragment with only retryable failed nodes for retry.
+            # Security-blocked nodes are excluded.
             # Dependencies are cleared because they were already satisfied in
             # earlier attempts.
             retry_nodes = []
             for n in fragment.nodes:
-                if n.name in failed_nodes:
+                if n.name in retryable_failures:
                     retry_nodes.append(
                         DAGNode(
                             name=n.name,
@@ -1013,4 +1086,5 @@ class OPALoop:
             "completed": list(dict.fromkeys(accumulated_completed)),
             "failed": exec_result.get("failed", []),
             "skipped": list(dict.fromkeys(accumulated_skipped)),
+            "audit_results": accumulated_audit,
         }

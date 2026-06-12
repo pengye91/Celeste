@@ -700,3 +700,297 @@ class TestToolkitAudit:
         )
         assert verdict is not None
         assert verdict.is_safe is False
+
+
+# ===========================================================================
+# Integration: OPALoop + SecurityAuditor + FeatureDetector
+# ===========================================================================
+
+
+class TestSecurityAuditIntegration:
+    """Integration tests verifying SECURITY_AUDIT events are written and detectable."""
+
+    @pytest.mark.asyncio
+    async def test_security_audit_events_written_for_safe_calls(self):
+        """Safe tool calls produce SECURITY_AUDIT events with is_safe=True."""
+        from celeste.config.settings import EngineSettings
+        from celeste.core.evaluator import EvaluatorDecision
+        from celeste.core.opa_loop import OPALoop
+        from celeste.core.planner import DAGFragment, DAGNode
+        from celeste.database.db import close_db, get_session, init_db
+        from celeste.database.models import TaskEventType, Workflow, WorkflowEvent
+        from celeste.tools.security_auditor import SecurityAuditor
+        from sqlalchemy import select
+
+        settings = EngineSettings(
+            DATABASE_URL="sqlite+aiosqlite:///:memory:",
+            MAX_OPA_CYCLES=10,
+            MAX_LLM_TOKENS=5000,
+        )
+        await init_db(settings=settings)
+
+        try:
+            # Create stub dependencies
+            agent = _StubAgent()
+            fragment = _make_fragment(
+                nodes=[_make_tool_node("safe_step", command="echo", args={"text": "hello"})],
+                goal_achieved=True,
+            )
+            planner = _StubPlanner(fragments=[fragment])
+            evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+            auditor = SecurityAuditor(llm_client=DummyLLMClient())
+
+            loop = OPALoop(
+                agent=agent,
+                planner=planner,
+                evaluator=evaluator,
+                settings=settings,
+                security_auditor=auditor,
+            )
+            result = await loop.run(goal="audit safe test")
+
+            # SECURITY_AUDIT events should be in WorkflowEvent table
+            async with get_session() as session:
+                wf_result = await session.execute(
+                    select(Workflow).where(Workflow.name == "audit safe test")
+                )
+                workflow = wf_result.scalar_one()
+
+                evt_result = await session.execute(
+                    select(WorkflowEvent).where(
+                        WorkflowEvent.workflow_id == workflow.id,
+                        WorkflowEvent.event_type == TaskEventType.SECURITY_AUDIT,
+                    )
+                )
+                audit_events = evt_result.scalars().all()
+
+            assert len(audit_events) >= 1, "Expected at least one SECURITY_AUDIT event"
+            for evt in audit_events:
+                assert evt.event_data.get("is_safe") is True
+                assert evt.event_data.get("tool_name") == "echo"
+        finally:
+            await close_db()
+
+    @pytest.mark.asyncio
+    async def test_security_audit_blocks_dangerous_call(self):
+        """Dangerous tool calls are blocked and produce is_safe=False audit events."""
+        from celeste.config.settings import EngineSettings
+        from celeste.core.evaluator import EvaluatorDecision
+        from celeste.core.opa_loop import OPALoop
+        from celeste.core.planner import DAGFragment, DAGNode
+        from celeste.database.db import close_db, get_session, init_db
+        from celeste.database.models import TaskEventType, Workflow, WorkflowEvent
+        from celeste.tools.security_auditor import SecurityAuditor
+        from sqlalchemy import select
+
+        settings = EngineSettings(
+            DATABASE_URL="sqlite+aiosqlite:///:memory:",
+            MAX_OPA_CYCLES=10,
+            MAX_LLM_TOKENS=5000,
+        )
+        await init_db(settings=settings)
+
+        try:
+            agent = _StubAgent()
+            fragment = _make_fragment(
+                nodes=[
+                    _make_tool_node("safe", command="echo", args={"text": "ok"}),
+                    _make_tool_node("danger", command="run_command", args={"command": "rm -rf /"}),
+                ],
+                goal_achieved=True,
+            )
+            planner = _StubPlanner(fragments=[fragment])
+            evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+            auditor = SecurityAuditor(llm_client=DummyLLMClient())
+
+            loop = OPALoop(
+                agent=agent,
+                planner=planner,
+                evaluator=evaluator,
+                settings=settings,
+                security_auditor=auditor,
+            )
+            await loop.run(goal="audit block test")
+
+            async with get_session() as session:
+                wf_result = await session.execute(
+                    select(Workflow).where(Workflow.name == "audit block test")
+                )
+                workflow = wf_result.scalar_one()
+
+                evt_result = await session.execute(
+                    select(WorkflowEvent).where(
+                        WorkflowEvent.workflow_id == workflow.id,
+                        WorkflowEvent.event_type == TaskEventType.SECURITY_AUDIT,
+                    )
+                )
+                audit_events = evt_result.scalars().all()
+
+            assert len(audit_events) >= 2, "Expected at least 2 SECURITY_AUDIT events"
+            # One safe, one blocked
+            safe_events = [e for e in audit_events if e.event_data.get("is_safe")]
+            blocked_events = [e for e in audit_events if not e.event_data.get("is_safe")]
+            assert len(safe_events) >= 1, "Expected at least one safe audit event"
+            assert len(blocked_events) >= 1, "Expected at least one blocked audit event"
+            assert blocked_events[0].event_data.get("risk_level") in ("high", "critical")
+        finally:
+            await close_db()
+
+    @pytest.mark.asyncio
+    async def test_detect_security_with_audit_events(self):
+        """FeatureDetector.detect_security() counts blocked and calculates coverage."""
+        from celeste.config.settings import EngineSettings
+        from celeste.core.evaluator import EvaluatorDecision
+        from celeste.core.opa_loop import OPALoop
+        from celeste.core.planner import DAGFragment, DAGNode
+        from celeste.database.db import close_db, init_db
+        from celeste.evaluation.detector import FeatureDetector
+        from celeste.tools.security_auditor import SecurityAuditor
+
+        settings = EngineSettings(
+            DATABASE_URL="sqlite+aiosqlite:///:memory:",
+            MAX_OPA_CYCLES=10,
+            MAX_LLM_TOKENS=5000,
+        )
+        await init_db(settings=settings)
+
+        try:
+            agent = _StubAgent()
+            fragment = _make_fragment(
+                nodes=[
+                    _make_tool_node("n1", command="echo", args={"text": "a"}),
+                    _make_tool_node("n2", command="echo", args={"text": "b"}),
+                    _make_tool_node("n3", command="run_command", args={"command": "rm -rf /"}),
+                ],
+                goal_achieved=True,
+            )
+            planner = _StubPlanner(fragments=[fragment])
+            evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+            auditor = SecurityAuditor(llm_client=DummyLLMClient())
+
+            loop = OPALoop(
+                agent=agent,
+                planner=planner,
+                evaluator=evaluator,
+                settings=settings,
+                security_auditor=auditor,
+            )
+            result = await loop.run(goal="detect security test")
+
+            detector = FeatureDetector()
+            evidence = await detector.detect_security(str(result.workflow_id))
+
+            assert evidence.blocked_count == 1
+            # 3 audited calls, 1 blocked => 2 safe / 3 total = ~66.67%
+            assert evidence.audit_coverage_percent == pytest.approx(66.67, rel=1e-2)
+            assert evidence.missing_audit_count == 0
+            assert evidence.error is None
+        finally:
+            await close_db()
+
+    @pytest.mark.asyncio
+    async def test_detect_security_no_auditor_configured(self):
+        """When no security auditor is wired, detect_security returns error."""
+        from celeste.config.settings import EngineSettings
+        from celeste.core.evaluator import EvaluatorDecision
+        from celeste.core.opa_loop import OPALoop
+        from celeste.core.planner import DAGFragment, DAGNode
+        from celeste.database.db import close_db, init_db
+        from celeste.evaluation.detector import FeatureDetector
+
+        settings = EngineSettings(
+            DATABASE_URL="sqlite+aiosqlite:///:memory:",
+            MAX_OPA_CYCLES=10,
+            MAX_LLM_TOKENS=5000,
+        )
+        await init_db(settings=settings)
+
+        try:
+            agent = _StubAgent()
+            fragment = _make_fragment(
+                nodes=[_make_tool_node("n1", command="echo", args={"text": "a"})],
+                goal_achieved=True,
+            )
+            planner = _StubPlanner(fragments=[fragment])
+            evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+            # No security_auditor passed
+            loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+            result = await loop.run(goal="no auditor test")
+
+            detector = FeatureDetector()
+            evidence = await detector.detect_security(str(result.workflow_id))
+
+            assert evidence.blocked_count == 0
+            assert evidence.audit_coverage_percent == 0.0
+            assert evidence.error is not None
+            assert "not wired" in evidence.error
+        finally:
+            await close_db()
+
+
+# ===========================================================================
+# Helpers for integration tests
+# ===========================================================================
+
+
+def _make_fragment(nodes, goal_achieved=False):
+    from celeste.core.planner import DAGFragment
+    return DAGFragment(
+        nodes=nodes,
+        reasoning="test",
+        estimated_remaining=1,
+        goal_achieved=goal_achieved,
+    )
+
+
+def _make_tool_node(name, command="run_command", args=None):
+    from celeste.core.planner import DAGNode
+    return DAGNode(
+        name=name,
+        task_type="tool_execution",
+        command=command,
+        arguments=args or {},
+        dependencies=[],
+    )
+
+
+class _StubAgent:
+    def __init__(self):
+        self.call_tool_calls = []
+
+    async def call_tool(self, name, arguments=None):
+        self.call_tool_calls.append({"name": name, "arguments": arguments})
+        return {"success": True}
+
+    async def list_tools(self):
+        return []
+
+
+class _StubPlanner:
+    def __init__(self, fragments):
+        self._fragments = fragments
+        self._index = 0
+        self.plan_calls = []
+
+    async def plan(self, **kwargs):
+        self.plan_calls.append(kwargs)
+        fragment = self._fragments[self._index]
+        self._index = min(self._index + 1, len(self._fragments) - 1)
+        return fragment
+
+
+class _StubEvaluator:
+    def __init__(self, decisions):
+        self._decisions = decisions
+        self._index = 0
+        self.evaluate_calls = []
+
+    async def evaluate(self, fragment, goal):
+        self.evaluate_calls.append({"fragment": fragment, "goal": goal})
+        decision = self._decisions[self._index]
+        self._index = min(self._index + 1, len(self._decisions) - 1)
+        return decision
