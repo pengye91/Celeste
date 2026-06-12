@@ -173,7 +173,7 @@ async def run_pharma_local(
     # ------------------------------------------------------------------
     # 4. Build planner and evaluator
     # ------------------------------------------------------------------
-    planner = Planner(llm_client=llm_client)
+    planner = Planner(llm_client=llm_client, toolkits=[toolkit, pharma_toolkit])
     evaluator = Evaluator(llm_client=llm_client)
 
     # ------------------------------------------------------------------
