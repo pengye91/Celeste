@@ -129,3 +129,67 @@ Captured during /plan-eng-review on 2026-06-11.
 - **Cons:** Non-deterministic LLM output means runs will differ; requires running example twice ($3+ cost); may need temperature=0 and retry logic.
 - **Context:** The cross-mode parity criterion was changed from hash-based to structural parity during review. Model agnosticism should use the same structural comparison. Best done as CI nightly or pre-release gate.
 - **Depends on:** Pharma example completion.
+
+## TODO-15: Generate CMC visual mockups before Phase 1 implementation
+
+- **What:** Configure `OPENAI_API_KEY` for the gstack designer and generate visual mockup variants for the Dashboard, Workflow Overview, and Constellation views. Run them through the AI slop checklist and capture an approved direction.
+- **Why:** The design plan is text-only right now. Implementers will build from descriptions, and we have no way to verify the observatory aesthetic doesn't look like a generic AI dashboard until we see it.
+- **Pros:** Catches aesthetic problems before code; gives implementers a concrete visual reference; verifies anti-patterns are avoided.
+- **Cons:** Requires an OpenAI API key and image-generation credits; adds a planning day before coding starts.
+- **Context:** Run `~/.claude/skills/gstack/design/dist/design setup` or set `OPENAI_API_KEY`, then use `$D variants` and `$D compare` to generate and review options. Reference `DESIGN.md` for tokens and `docs/superpowers/specs/2026-06-12-monitoring-ui-design-plan.md` §2.4 for the anti-pattern checklist.
+- **Depends on:** Design plan approval and access to an OpenAI API key.
+
+## TODO-16: Create SVG assets for empty-state illustrations
+
+- **What:** Create the SVG line-art assets defined in the design plan §6.16 for key empty states: observatory dome, empty starfield, silent telescope, empty docking port, blank crosshair sky, telescope lens cap.
+- **Why:** Empty states are features. A text-only empty state feels abandoned; a small, on-brand illustration makes the product feel intentional.
+- **Pros:** Improves first-run experience; reinforces the observatory metaphor; reduces operator confusion.
+- **Cons:** Requires illustration time; must respect the dark palette and not feel emoji-like or stock.
+- **Context:** Design specs are complete in §6.16: minimal line art in `--space-300` / `--aurora-500`, no gradients, no decorative blobs, 120×120 px bounding box. Each illustration should include a primary action button.
+- **Depends on:** DESIGN.md approval and visual direction from TODO-15.
+
+## TODO-17: Schedule post-implementation design review
+
+- **What:** After Phase 1 implementation is complete and approved mockups exist (TODO-15), run `/design-review` to visually QA the built UI against the plan, DESIGN.md, and approved mockups.
+- **Why:** Text plans drift from real implementations. A visual audit catches spacing, color, hierarchy, and interaction regressions that code review misses.
+- **Pros:** Ensures the shipped UI matches the intentional design; catches AI slop that crept in during implementation.
+- **Cons:** Requires a working build and a browser; adds review time; cannot run until there is something to screenshot.
+- **Context:** Target the review after Dashboard + Workflows list + Workflow overview are functional (end of Phase 1). Include the Constellation view if mockups are approved before then. Update this TODO's status once Phase 1 is ready.
+- **Depends on:** Completion of Phase 1 implementation and TODO-15 mockups.
+
+## TODO-18: Implement real LLM token tracking
+
+- **What:** Replace the hardcoded `+= 100` token heuristic in `OPALoop` with actual prompt + completion token counts from LLM client responses. Persist real usage in `WorkflowEvent` and `WorkflowResult`.
+- **Why:** The token burn chart in the OPA Loop view requires real data. Synthetic token counts mislead operators and undermine trust.
+- **Pros:** Accurate cost/usage visibility; enables future cost budgeting; makes the token burn chart meaningful.
+- **Cons:** Requires touching every LLM provider client (Anthropic, OpenAI, Google); response formats differ; needs graceful fallback if provider does not return usage.
+- **Context:** Added to Phase 0 after outside voice review. The metrics endpoint (`GET /api/workflows/{id}/metrics`) depends on this.
+- **Depends on:** Phase 0 backend work.
+
+## TODO-19: Add workflow retention policy and cleanup
+
+- **What:** Add `WORKFLOW_RETENTION_DAYS` to `EngineSettings`, implement a background cleanup task that archives/deletes old workflows and their events, and add `status`/`created_after` filters to `GET /api/workflows`.
+- **Why:** Workflows are never deleted today. The database grows unbounded, degrading the Workflows list and Dashboard over time.
+- **Pros:** Predictable database size; faster list queries; clearer operator view of recent workflows.
+- **Cons:** Adds a background task; need to decide archive vs. hard delete; cleanup must not race with running workflows.
+- **Context:** Added to Phase 0 after outside voice review. Cleanup should respect checkpoint lineage (`parent_workflow_id`).
+- **Depends on:** Phase 0 backend work.
+
+## TODO-20: Add checkpoint lineage to Workflow model
+
+- **What:** Add `parent_workflow_id` to the `Workflow` SQLAlchemy model, populate it in `CheckpointManager`, and expose it in the API so the UI can show "continued as" links.
+- **Why:** `CheckpointManager` creates new workflow runs when event thresholds are hit. Without lineage, operators lose track of workflows they were monitoring.
+- **Pros:** Maintains operator mental model; enables workflow history tracing; required for retention policy to handle checkpoint chains correctly.
+- **Cons:** Schema migration; need to update checkpoint logic and API schemas.
+- **Context:** Added to Phase 0 after outside voice review. Also consider adding an index on `parent_workflow_id`.
+- **Depends on:** Phase 0 backend work.
+
+## TODO-21: Add monitoring app CI/CD pipeline
+
+- **What:** Create `.github/workflows/monitoring.yml` to lint, type-check, build, and test the `monitoring/` Next.js app on PR/push. Include a `monitoring/Dockerfile` and docker-compose override.
+- **Why:** The monitoring app is a new deployable artifact. Without CI, the build rots and nobody can deploy it.
+- **Pros:** Reliable builds; catches TypeScript/type errors early; enables containerized deployment.
+- **Cons:** Adds CI maintenance; need to choose npm/bun/pnpm and Node version.
+- **Context:** Added to Phase 1 after eng review. Align package manager with the rest of the repo.
+- **Depends on:** Next.js project scaffold in Phase 1.
+

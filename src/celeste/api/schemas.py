@@ -93,12 +93,6 @@ class EventResponse(BaseModel):
     timestamp: str
 
 
-class ResumeWorkflowRequest(BaseModel):
-    """Request body for POST /api/workflows/{id}/resume."""
-
-    human_input: str = Field(min_length=1, max_length=10240)
-
-
 class ErrorResponse(BaseModel):
     """Standard error response."""
 
@@ -106,8 +100,66 @@ class ErrorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent management schemas
+# Monitoring UI schemas (Phase 0)
 # ---------------------------------------------------------------------------
+
+
+class PaginationParams(BaseModel):
+    """Shared pagination query parameters."""
+
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class WorkflowListResponse(BaseModel):
+    """Response for GET /api/workflows with pagination."""
+
+    items: list[WorkflowListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class WorkflowEventResponse(BaseModel):
+    """Response item for GET /api/workflows/{id}/workflow-events."""
+
+    id: str
+    event_type: str
+    event_data: dict | None
+    sequence_number: int
+    timestamp: str
+
+
+class WorkflowMetricsResponse(BaseModel):
+    """Response for GET /api/workflows/{id}/metrics."""
+
+    workflow_id: str
+    cycle_count: int
+    total_nodes: int
+    completed_nodes: int
+    failed_nodes: int
+    completed_percent: float
+    elapsed_seconds: float
+    llm_tokens_accumulated: int | None
+    max_concurrent_workspaces: int
+    security_pass_rate: float | None
+
+
+class GlobalEventResponse(BaseModel):
+    """Response item for GET /api/events global event stream."""
+
+    id: str
+    event_source: str  # "task" or "workflow"
+    workflow_id: str
+    event_type: str
+    event_data: dict | None
+    timestamp: str
+
+
+class CORSOrigins(BaseModel):
+    """Configuration model for CORS allowed origins."""
+
+    origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
 
 class RegisterAgentRequest(BaseModel):

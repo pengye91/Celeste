@@ -278,7 +278,9 @@ class TestListWorkflows:
     async def test_list_empty(self, client):
         resp = await client.get("/api/workflows")
         assert resp.status_code == 200
-        assert resp.json() == []
+        data = resp.json()
+        assert data["items"] == []
+        assert data["total"] == 0
 
     @pytest.mark.asyncio
     async def test_list_returns_created_workflows(self, client):
@@ -290,8 +292,8 @@ class TestListWorkflows:
         resp = await client.get("/api/workflows")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 2
-        names = {w["name"] for w in data}
+        assert len(data["items"]) == 2
+        names = {w["name"] for w in data["items"]}
         assert names == {"test-workflow", "second-workflow"}
 
     @pytest.mark.asyncio
@@ -299,8 +301,8 @@ class TestListWorkflows:
         await client.post("/api/workflows", json=SAMPLE_WORKFLOW_BODY)
         resp = await client.get("/api/workflows")
         data = resp.json()
-        assert len(data) == 1
-        wf = data[0]
+        assert len(data["items"]) == 1
+        wf = data["items"][0]
         assert "id" in wf
         assert "name" in wf
         assert wf["status"] == "pending"
@@ -948,115 +950,3 @@ class TestAgentManagement:
         fake_id = str(uuid.uuid4())
         resp = await client.get(f"/agents/{fake_id}/status")
         assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# Test: POST /api/workflows/{id}/resume
-# ---------------------------------------------------------------------------
-
-
-class TestResumeWorkflow:
-    """POST /api/workflows/{id}/resume resumes a paused workflow."""
-
-    @pytest.mark.asyncio
-    async def test_resume_paused_workflow(self, client):
-        """Resume a paused workflow returns 200 with running status."""
-        from celeste.core.opa_loop import WorkflowResult
-
-        create_resp = await client.post("/api/workflows", json=SAMPLE_WORKFLOW_BODY)
-        wf_id = create_resp.json()["workflow_id"]
-
-        # Patch engine.resume_workflow to return a completed result
-        with patch(
-            "celeste.api.app.Engine.resume_workflow",
-            return_value=WorkflowResult(
-                status="completed",
-                cycle_count=2,
-                llm_tokens_accumulated=200,
-                workflow_id=uuid.UUID(wf_id),
-            ),
-        ):
-            resp = await client.post(
-                f"/api/workflows/{wf_id}/resume",
-                json={"human_input": "priority: hospitals > clinics"},
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["workflow_id"] == wf_id
-            assert data["status"] == "completed"
-
-    @pytest.mark.asyncio
-    async def test_resume_non_paused_workflow(self, client):
-        """Resume a running workflow returns 409 Conflict."""
-        create_resp = await client.post("/api/workflows", json=SAMPLE_WORKFLOW_BODY)
-        wf_id = create_resp.json()["workflow_id"]
-
-        # Execute the workflow so it is no longer pending
-        await client.post(f"/api/workflows/{wf_id}/execute")
-
-        resp = await client.post(
-            f"/api/workflows/{wf_id}/resume",
-            json={"human_input": "some guidance"},
-        )
-        assert resp.status_code == 409
-        assert "not paused" in resp.json()["detail"].lower()
-
-    @pytest.mark.asyncio
-    async def test_resume_nonexistent_workflow(self, client):
-        """Resume a non-existent workflow returns 404."""
-        fake_id = str(uuid.uuid4())
-        resp = await client.post(
-            f"/api/workflows/{fake_id}/resume",
-            json={"human_input": "some guidance"},
-        )
-        assert resp.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_resume_empty_human_input(self, client):
-        """Resume with empty human_input returns 400."""
-        create_resp = await client.post("/api/workflows", json=SAMPLE_WORKFLOW_BODY)
-        wf_id = create_resp.json()["workflow_id"]
-
-        resp = await client.post(
-            f"/api/workflows/{wf_id}/resume",
-            json={"human_input": ""},
-        )
-        # Pydantic validation rejects empty string (min_length=1)
-        assert resp.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_resume_double_submit(self, client):
-        """Two simultaneous resumes: one succeeds, one gets 409."""
-        from celeste.core.opa_loop import WorkflowResult
-        from unittest.mock import AsyncMock
-
-        create_resp = await client.post("/api/workflows", json=SAMPLE_WORKFLOW_BODY)
-        wf_id = create_resp.json()["workflow_id"]
-
-        async_mock = AsyncMock(
-            side_effect=[
-                WorkflowResult(
-                    status="completed",
-                    cycle_count=2,
-                    llm_tokens_accumulated=200,
-                    workflow_id=uuid.UUID(wf_id),
-                ),
-                ValueError("Race: workflow not paused"),
-            ]
-        )
-
-        with patch("celeste.api.app.Engine.resume_workflow", async_mock):
-            resp1, resp2 = await asyncio.gather(
-                client.post(
-                    f"/api/workflows/{wf_id}/resume",
-                    json={"human_input": "first"},
-                ),
-                client.post(
-                    f"/api/workflows/{wf_id}/resume",
-                    json={"human_input": "second"},
-                ),
-            )
-
-        statuses = {resp1.status_code, resp2.status_code}
-        assert statuses == {200, 409}
-        assert async_mock.call_count == 2
