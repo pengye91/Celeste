@@ -357,7 +357,7 @@ def _cli() -> None:
     )
     parser.add_argument(
         "--seed-dir",
-        default=str(Path(__file__).resolve().parent),
+        default=str(Path(__file__).resolve().parent.parent.parent / "pharma-coldchain" / "seed_data"),
         help="Path to the seed_data directory",
     )
     parser.add_argument(
