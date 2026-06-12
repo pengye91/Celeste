@@ -1,0 +1,122 @@
+# Pharma Cold-Chain: Real Infrastructure Stack
+# =============================================
+#
+# All services run as actual Docker containers. Live LLM calls hit real
+# provider APIs. The only simulated aspect is the scenario seed data.
+#
+# Quick start:
+#   cp .env.example .env          # Edit .env with your API keys
+#   docker compose up -d          # Start all services
+#   python run_local.py           # Run the pharma scenario
+
+version: "3.9"
+
+services:
+  # ------------------------------------------------------------------
+  # Infrastructure Services
+  # ------------------------------------------------------------------
+
+  postgres-hub:
+    image: postgres:16-alpine
+    container_name: pharma-postgres-hub
+    environment:
+      POSTGRES_DB: pharma_coldchain
+      POSTGRES_USER: celeste
+      POSTGRES_PASSWORD: celeste
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./seed_data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U celeste -d pharma_coldchain"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis-cache:
+    image: redis:7-alpine
+    container_name: pharma-redis-cache
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  email-gateway:
+    image: mailhog/mailhog
+    container_name: pharma-email-gateway
+    ports:
+      - "1025:1025"   # SMTP server
+      - "8025:8025"   # Web UI (http://localhost:8025)
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # Domain Services
+  # ------------------------------------------------------------------
+
+  iot-telemetry-server:
+    image: python:3.11-alpine
+    container_name: pharma-iot-telemetry
+    working_dir: /app
+    command: >
+      sh -c "pip install fastapi uvicorn websockets && python server.py"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./seed_data:/app/seed_data:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TELEMETRY_SEED_DIR: /app/seed_data
+    depends_on:
+      postgres-hub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    restart: unless-stopped
+
+  customs-api:
+    image: python:3.11-alpine
+    container_name: pharma-customs-api
+    working_dir: /app
+    command: >
+      sh -c "pip install fastapi uvicorn && python server.py"
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./seed_data:/app/seed_data:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      SEED_DIR: /app/seed_data
+    depends_on:
+      postgres-hub:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celeste-agent:
+    image: python:3.11-alpine
+    container_name: pharma-celeste-agent
+    working_dir: /app
+    command: >
+      sh -c "pip install celeste && python -m celeste.core.agent.serve"
+    ports:
+      - "8900:8900"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: "postgresql+asyncpg://celeste:celeste@postgres-hub:5432/pharma_coldchain"
+      REDIS_URL: "redis://redis-cache:6379/0"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    depends_on:
+      postgres-hub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
