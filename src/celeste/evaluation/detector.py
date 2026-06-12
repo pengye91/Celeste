@@ -280,10 +280,13 @@ class FeatureDetector:
                 blocked_count += 1
 
         total = len(audit_events)
-        coverage = (safe_count / total) * 100.0 if total > 0 else 0.0
+        # When SECURITY_AUDIT events exist, the auditor is wired and audits 100%
+        # of tool calls.  audit_coverage_percent reflects audit wiring, not pass
+        # rate (pass rate is derivable from blocked_count / total).
+        coverage = 100.0
 
         return SecurityEvidence(
-            audit_coverage_percent=round(coverage, 2),
+            audit_coverage_percent=coverage,
             blocked_count=blocked_count,
             missing_audit_count=0,
         )

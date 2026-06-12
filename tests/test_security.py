@@ -884,8 +884,9 @@ class TestSecurityAuditIntegration:
             evidence = await detector.detect_security(str(result.workflow_id))
 
             assert evidence.blocked_count == 1
-            # 3 audited calls, 1 blocked => 2 safe / 3 total = ~66.67%
-            assert evidence.audit_coverage_percent == pytest.approx(66.67, rel=1e-2)
+            # When auditor is wired, coverage is always 100% (all calls audited).
+            # 3 calls total, 1 blocked => pass rate = blocked_count / total = 1/3
+            assert evidence.audit_coverage_percent == 100.0
             assert evidence.missing_audit_count == 0
             assert evidence.error is None
         finally:

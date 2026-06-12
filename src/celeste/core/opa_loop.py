@@ -388,22 +388,9 @@ class OPALoop:
             exec_result = await self._execute_with_retries(fragment)
 
             # Emit SECURITY_AUDIT events for each audited tool call.
-            for audit in exec_result.get("audit_results", []):
-                seq += 1
-                await self._emit_workflow_event(
-                    workflow_id,
-                    TaskEventType.SECURITY_AUDIT,
-                    {
-                        "node_name": audit.get("node_name"),
-                        "tool_name": audit.get("tool_name"),
-                        "arguments": audit.get("arguments"),
-                        "is_safe": audit.get("is_safe"),
-                        "risk_level": audit.get("risk_level"),
-                        "reason": audit.get("reason"),
-                        "detected_threats": audit.get("detected_threats", []),
-                    },
-                    seq,
-                )
+            seq = await self._emit_security_audit_events(
+                workflow_id, seq, exec_result.get("audit_results", [])
+            )
 
             # Update tracking sets from execution result.
             completed_node_names.update(exec_result.get("completed", []))
@@ -772,22 +759,9 @@ class OPALoop:
             exec_result = await self._execute_with_retries(fragment)
 
             # Emit SECURITY_AUDIT events for each audited tool call.
-            for audit in exec_result.get("audit_results", []):
-                seq += 1
-                await self._emit_workflow_event(
-                    workflow_id,
-                    TaskEventType.SECURITY_AUDIT,
-                    {
-                        "node_name": audit.get("node_name"),
-                        "tool_name": audit.get("tool_name"),
-                        "arguments": audit.get("arguments"),
-                        "is_safe": audit.get("is_safe"),
-                        "risk_level": audit.get("risk_level"),
-                        "reason": audit.get("reason"),
-                        "detected_threats": audit.get("detected_threats", []),
-                    },
-                    seq,
-                )
+            seq = await self._emit_security_audit_events(
+                workflow_id, seq, exec_result.get("audit_results", [])
+            )
 
             completed_node_names: set[str] = set()
             failed_node_names: set[str] = set()
@@ -1001,6 +975,34 @@ class OPALoop:
                     )
 
     # -- private helpers ----------------------------------------------------
+
+    async def _emit_security_audit_events(
+        self,
+        workflow_id: uuid.UUID,
+        seq: int,
+        audit_results: list[dict[str, Any]],
+    ) -> int:
+        """Emit SECURITY_AUDIT WorkflowEvents for each audited tool call.
+
+        Returns the next available sequence number.
+        """
+        for audit in audit_results:
+            seq += 1
+            await self._emit_workflow_event(
+                workflow_id,
+                TaskEventType.SECURITY_AUDIT,
+                {
+                    "node_name": audit.get("node_name"),
+                    "tool_name": audit.get("tool_name"),
+                    "arguments": audit.get("arguments"),
+                    "is_safe": audit.get("is_safe"),
+                    "risk_level": audit.get("risk_level"),
+                    "reason": audit.get("reason"),
+                    "detected_threats": audit.get("detected_threats", []),
+                },
+                seq,
+            )
+        return seq
 
     async def _execute_with_retries(
         self,
