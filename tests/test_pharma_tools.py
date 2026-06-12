@@ -523,3 +523,150 @@ class TestCustomsBridge:
 
         import shutil
         shutil.rmtree(tmpdir)
+
+
+# ---------------------------------------------------------------------------
+# PharmaColdChainToolkit Tests
+# ---------------------------------------------------------------------------
+
+
+class TestPharmaColdChainToolkit:
+    """Tests for PharmaColdChainToolkit (tool registry and execute dispatch)."""
+
+    @pytest.fixture
+    def toolkit(self):
+        from examples.pharma_coldchain.tools.pharma_toolkit import (
+            PharmaColdChainToolkit,
+        )
+
+        return PharmaColdChainToolkit()
+
+    def test_get_tools_returns_all_four(self, toolkit):
+        """get_tools() must return exactly the four registered pharma tools."""
+        tools = toolkit.get_tools()
+
+        assert len(tools) == 4
+        tool_names = {t.name for t in tools}
+        assert tool_names == {
+            "parse_telemetry",
+            "check_temperature_excursion",
+            "check_import_rules",
+            "check_batch_gdp_compliance",
+        }
+
+    def test_get_tool_returns_by_name(self, toolkit):
+        """get_tool() must return the correct ToolDefinition for a given name."""
+        tool = toolkit.get_tool("parse_telemetry")
+
+        assert tool is not None
+        assert tool.name == "parse_telemetry"
+        assert len(tool.parameters) == 1
+        assert tool.parameters[0].name == "payload"
+
+    def test_get_tool_returns_none_for_unknown_name(self, toolkit):
+        """get_tool() must return None when the tool name is not registered."""
+        tool = toolkit.get_tool("nonexistent_tool")
+        assert tool is None
+
+    def test_toolkit_name_and_description(self, toolkit):
+        """PharmaColdChainToolkit must expose name and description properties."""
+        assert toolkit.name == "pharma_coldchain"
+        assert "cold-chain" in toolkit.description.lower()
+
+    @pytest.mark.asyncio
+    async def test_execute_dispatches_parse_telemetry(self, toolkit):
+        """execute('parse_telemetry', ...) must dispatch to parse_telemetry."""
+        payload = {
+            "batch_id": "B-1840",
+            "temperature_c": 2.8,
+            "humidity_pct": 45.0,
+            "timestamp": "2026-06-12T10:30:00Z",
+        }
+
+        with patch(
+            "examples.pharma_coldchain.tools.pharma_toolkit.parse_telemetry",
+            new_callable=AsyncMock,
+        ) as mock_fn:
+            mock_fn.return_value = {"batch_id": "B-1840", "alerts": []}
+            result = await toolkit.execute(
+                "parse_telemetry",
+                {"payload": payload},
+                driver=None,
+            )
+
+        assert result["batch_id"] == "B-1840"
+        mock_fn.assert_called_once_with(payload)
+
+    @pytest.mark.asyncio
+    async def test_execute_dispatches_check_temperature_excursion(self, toolkit):
+        """execute('check_temperature_excursion', ...) must dispatch correctly."""
+        with patch(
+            "examples.pharma_coldchain.tools.pharma_toolkit.check_temperature_excursion",
+            new_callable=AsyncMock,
+        ) as mock_fn:
+            mock_fn.return_value = {
+                "excursion": False,
+                "max_temp_c": 3.1,
+                "duration_minutes": 0,
+            }
+            result = await toolkit.execute(
+                "check_temperature_excursion",
+                {"batch_id": "B-1840"},
+                driver=None,
+            )
+
+        assert result["excursion"] is False
+        mock_fn.assert_called_once_with("B-1840")
+
+    @pytest.mark.asyncio
+    async def test_execute_dispatches_check_import_rules(self, toolkit):
+        """execute('check_import_rules', ...) must dispatch correctly."""
+        with patch(
+            "examples.pharma_coldchain.tools.pharma_toolkit.check_import_rules",
+            new_callable=AsyncMock,
+        ) as mock_fn:
+            mock_fn.return_value = {
+                "rules": [{"rule": "GDP Certificate required"}],
+                "from_cache": False,
+            }
+            result = await toolkit.execute(
+                "check_import_rules",
+                {"country": "NG"},
+                driver=None,
+            )
+
+        assert result["from_cache"] is False
+        mock_fn.assert_called_once_with("NG")
+
+    @pytest.mark.asyncio
+    async def test_execute_dispatches_check_batch_gdp_compliance(self, toolkit):
+        """execute('check_batch_gdp_compliance', ...) must dispatch correctly."""
+        with patch(
+            "examples.pharma_coldchain.tools.pharma_toolkit.check_batch_gdp_compliance",
+            new_callable=AsyncMock,
+        ) as mock_fn:
+            mock_fn.return_value = {
+                "qualified": True,
+                "batch_id": "B-1840",
+            }
+            result = await toolkit.execute(
+                "check_batch_gdp_compliance",
+                {"batch_id": "B-1840", "country": "Netherlands"},
+                driver=None,
+            )
+
+        assert result["qualified"] is True
+        mock_fn.assert_called_once_with("B-1840", "Netherlands")
+
+    @pytest.mark.asyncio
+    async def test_execute_returns_error_for_unknown_tool(self, toolkit):
+        """execute() must return a structured error for an unknown tool name."""
+        result = await toolkit.execute(
+            "nonexistent_tool",
+            {"some_arg": "value"},
+            driver=None,
+        )
+
+        assert "error" in result
+        assert result["error"] == "tool_not_found"
+        assert result["tool_name"] == "nonexistent_tool"

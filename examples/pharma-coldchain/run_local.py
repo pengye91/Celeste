@@ -24,12 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import sys
 from pathlib import Path
 from typing import Any
 
-from celeste.config.settings import EngineSettings, get_settings, reset_settings
+from celeste.config.settings import EngineSettings, reset_settings
 from celeste.core.agent.agent import EnvironmentAgent
 from celeste.core.engine import Engine
 from celeste.core.evaluator import Evaluator
@@ -207,15 +205,12 @@ async def run_pharma_local(
         # ------------------------------------------------------------------
         if workflow_result.workflow_id:
             try:
-                from celeste.evaluation import (
-                    Evaluator as EvalEvaluator,
-                    format_report,
-                )
+                from celeste.evaluation import Evaluator as EvalEvaluator
 
-                evaluator = EvalEvaluator(
+                eval_reporter = EvalEvaluator(
                     workflow_id=str(workflow_result.workflow_id)
                 )
-                evaluation_report = await evaluator.evaluate()
+                evaluation_report = await eval_reporter.evaluate()
                 logger.info("Evaluation report generated")
             except Exception as exc:
                 logger.warning(
@@ -297,11 +292,6 @@ def main() -> None:
         "--api-key",
         default=None,
         help="LLM API key (default: from ANTHROPIC_API_KEY env var)",
-    )
-    parser.add_argument(
-        "--goal-file",
-        default=None,
-        help="Path to goal.md (default: ./goal.md)",
     )
     args = parser.parse_args()
 
