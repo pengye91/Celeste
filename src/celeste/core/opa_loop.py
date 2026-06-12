@@ -425,6 +425,13 @@ class OPALoop:
             elif decision == "ESCALATE" or decision == EvaluatorDecision.ESCALATE:
                 reason = getattr(decision, "reason", "evaluator_escalated")
                 # Tier 4: human escalation -- pause workflow and persist state.
+                seq += 1
+                await self._emit_workflow_event(
+                    workflow_id,
+                    TaskEventType.ESCALATE,
+                    {"reason": reason, "cycle": cycle_count},
+                    seq,
+                )
                 await self._pause_workflow(
                     workflow_id,
                     reason=reason,
