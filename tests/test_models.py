@@ -812,10 +812,12 @@ class TestTaskEventTypeEnum:
             "human_input_received",
             "workflow_resumed",
             "security_audit",
+            "workspace_spawn",
+            "workspace_destroy",
         }
         actual = {e.value for e in TaskEventType}
         assert actual == expected
-        assert len(TaskEventType) == 20
+        assert len(TaskEventType) == 22
 
     def test_task_event_type_has_new_opa_values(self):
         """New OPA loop event types must be present in TaskEventType."""

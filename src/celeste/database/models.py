@@ -92,6 +92,10 @@ class TaskEventType(str, enum.Enum):
     # Security audit event type
     SECURITY_AUDIT = "security_audit"
 
+    # Workspace lifecycle event types
+    WORKSPACE_SPAWN = "workspace_spawn"
+    WORKSPACE_DESTROY = "workspace_destroy"
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -232,13 +232,58 @@ class FeatureDetector:
     # ------------------------------------------------------------------
 
     async def detect_multi_workspace(self, workflow_id: str) -> MultiWorkspaceEvidence:
-        """Count workspace spawn/destroy events (stored in WorkflowEvent for now)."""
-        # Workspace events are not yet explicitly stored in the event log.
-        # For this implementation we return a placeholder.
+        """Count WORKSPACE_SPAWN / WORKSPACE_DESTROY events from WorkflowEvent rows.
+
+        Scans all workspace lifecycle events for the given workflow, ordered by
+        timestamp, and computes:
+
+        - ``concurrent_max``: peak number of simultaneously active workspaces.
+        - ``workspaces_leaked``: spawns that were never matched by a destroy.
+        """
+        wf_id = self._wf_id(workflow_id)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(WorkflowEvent)
+                .where(
+                    WorkflowEvent.workflow_id == wf_id,
+                    WorkflowEvent.event_type.in_(
+                        [
+                            TaskEventType.WORKSPACE_SPAWN,
+                            TaskEventType.WORKSPACE_DESTROY,
+                        ]
+                    ),
+                )
+                .order_by(WorkflowEvent.timestamp.asc())
+            )
+            events = result.scalars().all()
+
+        if not events:
+            return MultiWorkspaceEvidence(
+                concurrent_max=0,
+                workspaces_leaked=0,
+                error="no workspace events found",
+            )
+
+        concurrent_max = 0
+        current = 0
+        spawn_count = 0
+        destroy_count = 0
+
+        for event in events:
+            if event.event_type == TaskEventType.WORKSPACE_SPAWN:
+                current += 1
+                spawn_count += 1
+            elif event.event_type == TaskEventType.WORKSPACE_DESTROY:
+                current -= 1
+                destroy_count += 1
+            concurrent_max = max(concurrent_max, current)
+
+        workspaces_leaked = spawn_count - destroy_count
+
         return MultiWorkspaceEvidence(
-            concurrent_max=0,
-            workspaces_leaked=0,
-            error="workspace events not yet instrumented",
+            concurrent_max=concurrent_max,
+            workspaces_leaked=workspaces_leaked,
         )
 
     # ------------------------------------------------------------------

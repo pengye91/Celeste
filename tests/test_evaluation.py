@@ -389,6 +389,89 @@ class TestFeatureDetector:
         assert evidence.state_hash_match is True
 
     @pytest.mark.asyncio
+    async def test_detect_multi_workspace_no_events(self):
+        """No workspace events should return concurrent_max=0 with a descriptive error."""
+        wf_id = await _run_workflow(
+            "multi-ws none",
+            fragments=[_make_fragment([_make_tool_node("n1")], goal_achieved=True)],
+            decisions=[EvaluatorDecision.DONE],
+        )
+        detector = FeatureDetector()
+        evidence = await detector.detect_multi_workspace(wf_id)
+        assert evidence.concurrent_max == 0
+        assert evidence.workspaces_leaked == 0
+        assert evidence.error is not None
+
+    @pytest.mark.asyncio
+    async def test_detect_multi_workspace_concurrent(self):
+        """Correctly computes concurrent_max and leak count from events."""
+        wf_id = await _run_workflow(
+            "multi-ws concurrent",
+            fragments=[_make_fragment([_make_tool_node("n1")], goal_achieved=True)],
+            decisions=[EvaluatorDecision.DONE],
+        )
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "multi-ws concurrent")
+            )
+            workflow = result.scalar_one()
+            # Simulate 3 concurrent workspaces with partial teardown (1 leak)
+            # seq: spawn(1), spawn(2), spawn(3), destroy(2), destroy(3)  -> concurrent_max=3, leaked=1
+            for seq, etype in [
+                (1, TaskEventType.WORKSPACE_SPAWN),
+                (2, TaskEventType.WORKSPACE_SPAWN),
+                (3, TaskEventType.WORKSPACE_SPAWN),
+                (4, TaskEventType.WORKSPACE_DESTROY),
+                (5, TaskEventType.WORKSPACE_DESTROY),
+            ]:
+                session.add(
+                    WorkflowEvent(
+                        workflow_id=workflow.id,
+                        event_type=etype,
+                        sequence_number=seq,
+                    )
+                )
+
+        detector = FeatureDetector()
+        evidence = await detector.detect_multi_workspace(wf_id)
+        assert evidence.concurrent_max == 3
+        assert evidence.workspaces_leaked == 1
+        assert evidence.error is None
+
+    @pytest.mark.asyncio
+    async def test_detect_multi_workspace_all_torn_down(self):
+        """When all spawns are matched by destroys, leaked=0."""
+        wf_id = await _run_workflow(
+            "multi-ws clean",
+            fragments=[_make_fragment([_make_tool_node("n1")], goal_achieved=True)],
+            decisions=[EvaluatorDecision.DONE],
+        )
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.name == "multi-ws clean")
+            )
+            workflow = result.scalar_one()
+            for seq, etype in [
+                (1, TaskEventType.WORKSPACE_SPAWN),
+                (2, TaskEventType.WORKSPACE_SPAWN),
+                (3, TaskEventType.WORKSPACE_DESTROY),
+                (4, TaskEventType.WORKSPACE_DESTROY),
+            ]:
+                session.add(
+                    WorkflowEvent(
+                        workflow_id=workflow.id,
+                        event_type=etype,
+                        sequence_number=seq,
+                    )
+                )
+
+        detector = FeatureDetector()
+        evidence = await detector.detect_multi_workspace(wf_id)
+        assert evidence.concurrent_max == 2
+        assert evidence.workspaces_leaked == 0
+        assert evidence.error is None
+
+    @pytest.mark.asyncio
     async def test_detect_security_blocked_call(self):
         wf_id = await _run_workflow(
             "security",
