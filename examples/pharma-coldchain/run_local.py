@@ -36,13 +36,10 @@ from celeste.core.evaluator import Evaluator
 from celeste.core.planner import Planner
 from celeste.toolkits.system_data import SystemDataToolkit
 
-# Custom pharma cold-chain tools
-from examples.pharma_coldchain.tools.cold_chain import (
-    check_temperature_excursion,
-    parse_telemetry,
-)
-from examples.pharma_coldchain.tools.customs_bridge import check_import_rules
-from examples.pharma_coldchain.tools.gdp_compliance import check_batch_gdp_compliance
+# Custom pharma cold-chain toolkit — wraps GDP compliance, telemetry parsing,
+# temperature excursion detection, and customs import rules. Registered with
+# the agent below so the planner can discover and invoke all four tools.
+from examples.pharma_coldchain.tools.pharma_toolkit import PharmaColdChainToolkit
 
 logging.basicConfig(
     level=logging.INFO,
@@ -158,19 +155,19 @@ async def run_pharma_local(
     llm_client = _build_llm_client(settings)
 
     # ------------------------------------------------------------------
-    # 2. Build toolkit
+    # 2. Build toolkits
     # ------------------------------------------------------------------
-    # Use SystemDataToolkit for SQL queries, file operations, and process
-    # management. The custom pharma tools are exposed as individual callables
-    # that the agent can invoke via the toolkit's call_tool method.
+    # SystemDataToolkit: SQL queries, file operations, and process management.
+    # PharmaColdChainToolkit: GDP compliance, telemetry, customs, excursion.
     toolkit = SystemDataToolkit()
+    pharma_toolkit = PharmaColdChainToolkit()
 
     # ------------------------------------------------------------------
     # 3. Build agent (in-process, no network)
     # ------------------------------------------------------------------
     agent = EnvironmentAgent.in_process(
         workdir=".",
-        toolkits=[toolkit],
+        toolkits=[toolkit, pharma_toolkit],
     )
 
     # ------------------------------------------------------------------
@@ -236,8 +233,8 @@ async def run_pharma_local(
         if workflow_result and workflow_result.workflow_id
         else None,
         "status": workflow_result.status if workflow_result else "unknown",
-        "cycles": workflow_result.cycles if workflow_result else 0,
-        "token_usage": workflow_result.llm_tokens_used
+        "cycles": workflow_result.cycle_count if workflow_result else 0,
+        "token_usage": workflow_result.llm_tokens_accumulated
         if workflow_result
         else 0,
         "evaluation_report": (
