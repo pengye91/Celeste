@@ -32,20 +32,25 @@ from celeste.database.models import (
     TaskEvent,
     TaskEventType,
     TaskNode,
+    TaskNodeStatus,
     Workflow,
+    WorkflowEvent,
     WorkflowStatus,
 )
 from celeste.api.schemas import (
     CreateWorkflowRequest,
     WorkflowResponse,
     WorkflowListItem,
+    WorkflowListResponse,
     WorkflowDetailResponse,
     WorkflowStatusResponse,
     NodeStatusItem,
     NodeStatusResponse,
     EventResponse,
+    WorkflowEventResponse,
+    WorkflowMetricsResponse,
+    GlobalEventResponse,
     ErrorResponse,
-    ResumeWorkflowRequest,
     RegisterAgentRequest,
     RegisterAgentResponse,
     AgentStatusResponse,
@@ -101,6 +106,25 @@ def create_app(
     app.state.agent_registry: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
+    # CORS middleware
+    # ------------------------------------------------------------------
+
+    import os
+
+    from fastapi.middleware.cors import CORSMiddleware
+
+    _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+    _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # ------------------------------------------------------------------
     # Health check
     # ------------------------------------------------------------------
 
@@ -151,26 +175,68 @@ def create_app(
 
     @app.get(
         "/api/workflows",
-        response_model=list[WorkflowListItem],
+        response_model=WorkflowListResponse,
         tags=["workflows"],
     )
-    async def list_workflows():
-        """List all workflows."""
-        workflows: list[WorkflowListItem] = []
+    async def list_workflows(
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        status: str | None = Query(default=None),
+        created_after: str | None = Query(default=None),
+    ):
+        """List workflows with pagination and optional filters."""
         async with get_session() as session:
-            result = await session.execute(
-                select(Workflow).order_by(Workflow.created_at.desc())
-            )
-            for wf in result.scalars().all():
-                workflows.append(
-                    WorkflowListItem(
-                        id=str(wf.id),
-                        name=wf.name,
-                        status=wf.status.value,
-                        created_at=wf.created_at.isoformat(),
+            stmt = select(Workflow)
+
+            if status is not None:
+                try:
+                    status_enum = WorkflowStatus(status)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid status: {status}",
                     )
+                stmt = stmt.where(Workflow.status == status_enum)
+
+            if created_after is not None:
+                try:
+                    after_dt = datetime.datetime.fromisoformat(created_after)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid created_after: {created_after}",
+                    )
+                stmt = stmt.where(Workflow.created_at > after_dt)
+
+            # Total count
+            count_stmt = select(Workflow)
+            if status is not None:
+                count_stmt = count_stmt.where(Workflow.status == status_enum)
+            if created_after is not None:
+                count_stmt = count_stmt.where(Workflow.created_at > after_dt)
+            total_result = await session.execute(count_stmt)
+            total = len(total_result.scalars().all())
+
+            stmt = stmt.order_by(Workflow.created_at.desc()).offset(offset).limit(limit)
+            result = await session.execute(stmt)
+            workflows = result.scalars().all()
+
+            items = [
+                WorkflowListItem(
+                    id=str(wf.id),
+                    name=wf.name,
+                    status=wf.status.value,
+                    created_at=wf.created_at.isoformat(),
                 )
-        return workflows
+                for wf in workflows
+            ]
+
+        return WorkflowListResponse(
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
 
     # ------------------------------------------------------------------
     # GET /api/workflows/{workflow_id}
@@ -331,9 +397,10 @@ def create_app(
     async def get_workflow_events(
         workflow_id: str,
         event_type: str | None = Query(default=None),
+        since_id: str | None = Query(default=None),
         limit: int = Query(default=50, ge=1, le=500),
     ):
-        """Get all TaskEvents for a workflow (audit log)."""
+        """Get TaskEvents for a workflow with optional cursor and type filter."""
         try:
             wf_uuid = uuid.UUID(workflow_id)
         except ValueError:
@@ -365,6 +432,13 @@ def create_app(
                     )
                 stmt = stmt.where(TaskEvent.event_type == evt_enum)
 
+            if since_id is not None:
+                try:
+                    since_uuid = uuid.UUID(since_id)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid since_id")
+                stmt = stmt.where(TaskEvent.id > since_uuid)
+
             stmt = stmt.limit(limit)
             result = await session.execute(stmt)
             events = result.scalars().all()
@@ -378,6 +452,250 @@ def create_app(
                 )
                 for e in events
             ]
+
+    # ------------------------------------------------------------------
+    # GET /api/workflows/{workflow_id}/workflow-events
+    # ------------------------------------------------------------------
+
+    @app.get(
+        "/api/workflows/{workflow_id}/workflow-events",
+        response_model=list[WorkflowEventResponse],
+        tags=["workflows"],
+    )
+    async def get_workflow_workflow_events(
+        workflow_id: str,
+        event_type: str | None = Query(default=None),
+        since_id: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=500),
+    ):
+        """Get WorkflowEvent rows for a workflow with optional cursor and type filter."""
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == wf_uuid)
+            )
+            wf = result.scalar_one_or_none()
+            if wf is None:
+                raise HTTPException(status_code=404, detail="Workflow not found")
+
+            stmt = (
+                select(WorkflowEvent)
+                .where(WorkflowEvent.workflow_id == wf_uuid)
+                .order_by(WorkflowEvent.timestamp.asc())
+            )
+
+            if event_type is not None:
+                try:
+                    evt_enum = TaskEventType(event_type)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid event_type: {event_type}",
+                    )
+                stmt = stmt.where(WorkflowEvent.event_type == evt_enum)
+
+            if since_id is not None:
+                try:
+                    since_uuid = uuid.UUID(since_id)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Invalid since_id")
+                stmt = stmt.where(WorkflowEvent.id > since_uuid)
+
+            stmt = stmt.limit(limit)
+            result = await session.execute(stmt)
+            events = result.scalars().all()
+
+            return [
+                WorkflowEventResponse(
+                    id=str(e.id),
+                    event_type=e.event_type.value,
+                    event_data=e.event_data,
+                    sequence_number=e.sequence_number,
+                    timestamp=e.timestamp.isoformat(),
+                )
+                for e in events
+            ]
+
+    # ------------------------------------------------------------------
+    # GET /api/workflows/{workflow_id}/metrics
+    # ------------------------------------------------------------------
+
+    @app.get(
+        "/api/workflows/{workflow_id}/metrics",
+        response_model=WorkflowMetricsResponse,
+        tags=["workflows"],
+    )
+    async def get_workflow_metrics(workflow_id: str):
+        """Compute and return workflow execution metrics."""
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == wf_uuid)
+            )
+            wf = result.scalar_one_or_none()
+            if wf is None:
+                raise HTTPException(status_code=404, detail="Workflow not found")
+
+            # Cycle count: plan_generated WorkflowEvent rows (or TaskEvent if needed)
+            cycle_result = await session.execute(
+                select(WorkflowEvent).where(
+                    WorkflowEvent.workflow_id == wf_uuid,
+                    WorkflowEvent.event_type == TaskEventType.PLAN_GENERATED,
+                )
+            )
+            cycle_count = len(cycle_result.scalars().all())
+
+            # Node counts from TaskNode
+            nodes_result = await session.execute(
+                select(TaskNode).where(TaskNode.workflow_id == wf_uuid)
+            )
+            nodes = nodes_result.scalars().all()
+            total_nodes = len(nodes)
+            completed_nodes = sum(
+                1 for n in nodes if n.status == TaskNodeStatus.COMPLETED
+            )
+            failed_nodes = sum(
+                1 for n in nodes if n.status == TaskNodeStatus.FAILED
+            )
+            completed_percent = (
+                (completed_nodes / total_nodes * 100) if total_nodes > 0 else 0.0
+            )
+
+            # Elapsed seconds
+            now = datetime.datetime.now(datetime.timezone.utc)
+            created_at = wf.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+            updated_at = wf.updated_at
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+            if wf.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED):
+                elapsed_seconds = (updated_at - created_at).total_seconds()
+            else:
+                elapsed_seconds = (now - created_at).total_seconds()
+
+            # Max concurrent workspaces from WORKSPACE_SPAWN / WORKSPACE_DESTROY events
+            spawn_destroy_result = await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.workflow_id == wf_uuid,
+                    TaskEvent.event_type.in_(
+                        [TaskEventType.WORKSPACE_SPAWN, TaskEventType.WORKSPACE_DESTROY]
+                    ),
+                ).order_by(TaskEvent.timestamp.asc())
+            )
+            spawn_destroy_events = spawn_destroy_result.scalars().all()
+            current = 0
+            max_concurrent = 0
+            for evt in spawn_destroy_events:
+                if evt.event_type == TaskEventType.WORKSPACE_SPAWN:
+                    current += 1
+                    max_concurrent = max(max_concurrent, current)
+                elif evt.event_type == TaskEventType.WORKSPACE_DESTROY:
+                    current = max(0, current - 1)
+
+            # Security pass rate from SECURITY_AUDIT events
+            audit_result = await session.execute(
+                select(TaskEvent).where(
+                    TaskEvent.workflow_id == wf_uuid,
+                    TaskEvent.event_type == TaskEventType.SECURITY_AUDIT,
+                )
+            )
+            audit_events = audit_result.scalars().all()
+            if audit_events:
+                safe_count = sum(
+                    1
+                    for e in audit_events
+                    if e.event_data and e.event_data.get("result") == "safe"
+                )
+                security_pass_rate = safe_count / len(audit_events)
+            else:
+                security_pass_rate = None
+
+            return WorkflowMetricsResponse(
+                workflow_id=str(wf.id),
+                cycle_count=cycle_count,
+                total_nodes=total_nodes,
+                completed_nodes=completed_nodes,
+                failed_nodes=failed_nodes,
+                completed_percent=completed_percent,
+                elapsed_seconds=elapsed_seconds,
+                llm_tokens_accumulated=None,
+                max_concurrent_workspaces=max_concurrent,
+                security_pass_rate=security_pass_rate,
+            )
+
+    # ------------------------------------------------------------------
+    # GET /api/events
+    # ------------------------------------------------------------------
+
+    @app.get(
+        "/api/events",
+        response_model=list[GlobalEventResponse],
+        tags=["events"],
+    )
+    async def get_global_events(
+        limit: int = Query(default=50, ge=1, le=500),
+        offset: int = Query(default=0, ge=0),
+    ):
+        """Global event stream combining TaskEvent and WorkflowEvent, newest first."""
+        async with get_session() as session:
+            task_stmt = (
+                select(TaskEvent)
+                .order_by(TaskEvent.timestamp.desc())
+                .limit(limit + offset)
+            )
+            task_result = await session.execute(task_stmt)
+            task_events = task_result.scalars().all()
+
+            wf_stmt = (
+                select(WorkflowEvent)
+                .order_by(WorkflowEvent.timestamp.desc())
+                .limit(limit + offset)
+            )
+            wf_result = await session.execute(wf_stmt)
+            wf_events = wf_result.scalars().all()
+
+            combined = []
+            for e in task_events:
+                combined.append(
+                    (
+                        e.timestamp,
+                        GlobalEventResponse(
+                            id=str(e.id),
+                            event_source="task",
+                            workflow_id=str(e.workflow_id),
+                            event_type=e.event_type.value,
+                            event_data=e.event_data,
+                            timestamp=e.timestamp.isoformat(),
+                        ),
+                    )
+                )
+            for e in wf_events:
+                combined.append(
+                    (
+                        e.timestamp,
+                        GlobalEventResponse(
+                            id=str(e.id),
+                            event_source="workflow",
+                            workflow_id=str(e.workflow_id),
+                            event_type=e.event_type.value,
+                            event_data=e.event_data,
+                            timestamp=e.timestamp.isoformat(),
+                        ),
+                    )
+                )
+
+            combined.sort(key=lambda x: x[0], reverse=True)
+            paginated = combined[offset : offset + limit]
+            return [item[1] for item in paginated]
 
     # ------------------------------------------------------------------
     # GET /api/workflows/{workflow_id}/nodes
@@ -459,34 +777,6 @@ def create_app(
             wf.status = WorkflowStatus.CANCELLED
 
         return WorkflowResponse(workflow_id=workflow_id, status="cancelled")
-
-    # ------------------------------------------------------------------
-    # POST /api/workflows/{workflow_id}/resume
-    # ------------------------------------------------------------------
-
-    @app.post(
-        "/api/workflows/{workflow_id}/resume",
-        response_model=WorkflowResponse,
-        tags=["workflows"],
-    )
-    async def resume_workflow(workflow_id: str, body: ResumeWorkflowRequest):
-        """Resume a paused workflow with human input."""
-        try:
-            wf_uuid = uuid.UUID(workflow_id)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Workflow not found")
-
-        try:
-            result = await engine.resume_workflow(wf_uuid, body.human_input)
-        except ValueError as exc:
-            detail = str(exc)
-            if "not found" in detail:
-                raise HTTPException(status_code=404, detail=detail)
-            if "not paused" in detail:
-                raise HTTPException(status_code=409, detail=detail)
-            raise HTTPException(status_code=400, detail=detail)
-
-        return WorkflowResponse(workflow_id=workflow_id, status=result.status)
 
     # ------------------------------------------------------------------
     # Agent management endpoints
