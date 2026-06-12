@@ -601,7 +601,7 @@ class OPALoop:
             workflow = result.scalar_one_or_none()
             if workflow is None:
                 raise ValueError(f"Workflow {workflow_id} not found")
-            if workflow.status != WorkflowStatus.PAUSED:
+            if workflow.status not in (WorkflowStatus.PAUSED, WorkflowStatus.RUNNING):
                 raise ValueError(
                     f"Workflow {workflow_id} is not paused (status={workflow.status.value})"
                 )
