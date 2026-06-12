@@ -427,28 +427,29 @@ class Engine:
                     )
                 )
 
-            workspace = self._workspace_factory()
-            async with workspace:
-                await self._execute_node(node_id, workspace)
-
-            # Emit WORKSPACE_DESTROY after workspace teardown
-            async with get_session() as session:
-                seq_result = await session.execute(
-                    select(WorkflowEvent)
-                    .where(WorkflowEvent.workflow_id == workflow_id)
-                    .order_by(WorkflowEvent.sequence_number.desc())
-                    .limit(1)
-                )
-                last_event = seq_result.scalar_one_or_none()
-                next_seq = (last_event.sequence_number + 1) if last_event else 1
-                session.add(
-                    WorkflowEvent(
-                        workflow_id=workflow_id,
-                        task_node_id=node_id,
-                        event_type=TaskEventType.WORKSPACE_DESTROY,
-                        sequence_number=next_seq,
+            try:
+                workspace = self._workspace_factory()
+                async with workspace:
+                    await self._execute_node(node_id, workspace)
+            finally:
+                # Emit WORKSPACE_DESTROY after workspace teardown
+                async with get_session() as session:
+                    seq_result = await session.execute(
+                        select(WorkflowEvent)
+                        .where(WorkflowEvent.workflow_id == workflow_id)
+                        .order_by(WorkflowEvent.sequence_number.desc())
+                        .limit(1)
                     )
-                )
+                    last_event = seq_result.scalar_one_or_none()
+                    next_seq = (last_event.sequence_number + 1) if last_event else 1
+                    session.add(
+                        WorkflowEvent(
+                            workflow_id=workflow_id,
+                            task_node_id=node_id,
+                            event_type=TaskEventType.WORKSPACE_DESTROY,
+                            sequence_number=next_seq,
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Node execution

@@ -390,7 +390,7 @@ class TestFeatureDetector:
 
     @pytest.mark.asyncio
     async def test_detect_multi_workspace_no_events(self):
-        """No workspace events should return concurrent_max=0 with a descriptive error."""
+        """No workspace events should return concurrent_max=0 without an error."""
         wf_id = await _run_workflow(
             "multi-ws none",
             fragments=[_make_fragment([_make_tool_node("n1")], goal_achieved=True)],
@@ -400,7 +400,7 @@ class TestFeatureDetector:
         evidence = await detector.detect_multi_workspace(wf_id)
         assert evidence.concurrent_max == 0
         assert evidence.workspaces_leaked == 0
-        assert evidence.error is not None
+        assert evidence.error is None
 
     @pytest.mark.asyncio
     async def test_detect_multi_workspace_concurrent(self):

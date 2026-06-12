@@ -262,7 +262,6 @@ class FeatureDetector:
             return MultiWorkspaceEvidence(
                 concurrent_max=0,
                 workspaces_leaked=0,
-                error="no workspace events found",
             )
 
         concurrent_max = 0
