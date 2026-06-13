@@ -627,7 +627,7 @@ def create_app(
                 failed_nodes=failed_nodes,
                 completed_percent=completed_percent,
                 elapsed_seconds=elapsed_seconds,
-                llm_tokens_accumulated=None,
+                llm_tokens_accumulated=wf.llm_tokens_accumulated,
                 max_concurrent_workspaces=max_concurrent,
                 security_pass_rate=security_pass_rate,
             )

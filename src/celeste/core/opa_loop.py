@@ -368,6 +368,15 @@ class OPALoop:
                 # Retry with simplified prompt on next cycle
                 continue
 
+            # Harvest LLM usage stashed on the fragment by Planner.plan().
+            fragment_usage = getattr(fragment, "_usage", None) or {}
+            total_tokens = int(fragment_usage.get("total_tokens") or 0)
+            if total_tokens > 0:
+                llm_tokens_accumulated += total_tokens
+                await self._update_workflow_tokens(
+                    workflow_id, llm_tokens_accumulated
+                )
+
             seq += 1
             await self._emit_workflow_event(
                 workflow_id,
@@ -534,6 +543,20 @@ class OPALoop:
             workflow = result.scalar_one_or_none()
             if workflow is not None:
                 workflow.status = status
+
+    async def _update_workflow_tokens(
+        self,
+        workflow_id: uuid.UUID,
+        llm_tokens_accumulated: int,
+    ) -> None:
+        """Persist the running token total onto the Workflow row."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == workflow_id)
+            )
+            workflow = result.scalar_one_or_none()
+            if workflow is not None:
+                workflow.llm_tokens_accumulated = llm_tokens_accumulated
 
     async def _emit_workflow_event(
         self,
@@ -741,6 +764,15 @@ class OPALoop:
                         workflow_id=workflow_id,
                     )
                 continue
+
+            # Harvest LLM usage stashed on the fragment by Planner.plan().
+            fragment_usage = getattr(fragment, "_usage", None) or {}
+            total_tokens = int(fragment_usage.get("total_tokens") or 0)
+            if total_tokens > 0:
+                llm_tokens_accumulated += total_tokens
+                await self._update_workflow_tokens(
+                    workflow_id, llm_tokens_accumulated
+                )
 
             seq += 1
             await self._emit_workflow_event(
