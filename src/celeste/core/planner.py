@@ -212,8 +212,8 @@ class Planner:
         messages.append(LLMMessage(role="user", content="\n\n".join(parts)))
 
         try:
-            return await asyncio.wait_for(
-                self._client.structured_output(
+            response, fragment = await asyncio.wait_for(
+                self._client.structured_output_with_usage(
                     messages,
                     DAGFragment,
                     temperature=0.0,
@@ -224,6 +224,12 @@ class Planner:
             raise PlannerTimeoutError(
                 f"Planner LLM call exceeded timeout of {timeout_ms}ms"
             ) from exc
+
+        # Stash usage on the fragment so OPALoop can accumulate tokens
+        # without changing the public return type.
+        if response is not None and getattr(response, "usage", None):
+            setattr(fragment, "_usage", dict(response.usage))
+        return fragment
 
     async def plan_full_dag(
         self,

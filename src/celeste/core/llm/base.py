@@ -83,6 +83,31 @@ class BaseLLMClient(ABC):
         )
         return response_model.model_validate_json(response.content)
 
+    async def structured_output_with_usage(
+        self,
+        messages: list[LLMMessage],
+        response_model: type[BaseModel],
+        *,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+    ) -> tuple[LLMResponse | None, BaseModel]:
+        """Like :meth:`structured_output` but also returns the raw LLMResponse.
+
+        Default implementation calls ``structured_output`` and returns a
+        ``(None, model)`` tuple (no usage captured). Subclasses that have
+        provider-native structured output should override this to also
+        return the ``LLMResponse`` so callers can harvest ``usage``.
+        """
+        parsed = await self.structured_output(
+            messages,
+            response_model,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return None, parsed
+
     @abstractmethod
     async def close(self) -> None:
         """Clean up client resources."""
