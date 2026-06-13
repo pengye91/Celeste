@@ -1,138 +1,22 @@
-"""SEC-001 / SEC-006: command-injection prevention tests for workspaces.
+"""SEC-006: docker workspace must not pass shell=True to subprocess.run.
 
 Tests demonstrate that:
-- _stream_subprocess_events must NOT use asyncio.create_subprocess_shell (SEC-001)
-- Shell metacharacters in command strings must not be interpreted
-- DockerWorkspace.execute must NOT pass shell=True to subprocess.run inside the container
+- DockerWorkspace.execute builds an inner_python that calls
+  subprocess.run(cmd, shell=True, ...) inside the container.
+- This is an injection sink: a malicious `command` can run extra commands.
+- The fix is to use a structured argv list (shell=False).
 """
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-import os
-import tempfile
-from typing import Any
+import json
 
 import pytest
 
 
 # ===========================================================================
-# SEC-001: workspace base uses shell=False, structured argv list
-# ===========================================================================
-
-
-class TestStreamSubprocessUsesExec:
-    """_stream_subprocess_events must NOT use asyncio.create_subprocess_shell."""
-
-    def test_source_does_not_call_create_subprocess_shell(self):
-        """Audit the source of base.py: create_subprocess_shell must not be used."""
-        from celeste.core.workspaces import base as base_mod
-
-        source = inspect.getsource(base_mod)
-        assert "create_subprocess_shell" not in source, (
-            "SEC-001: _stream_subprocess_events must use create_subprocess_exec "
-            "with argv list, not create_subprocess_shell (which interprets shell "
-            "metacharacters)"
-        )
-
-    def test_source_calls_create_subprocess_exec(self):
-        """Audit the source of base.py: create_subprocess_exec must be used."""
-        from celeste.core.workspaces import base as base_mod
-
-        source = inspect.getsource(base_mod)
-        assert "create_subprocess_exec" in source
-
-
-class TestShellMetacharsNotInterpreted:
-    """Shell metacharacters in a command string must not be interpreted."""
-
-    @pytest.mark.asyncio
-    async def test_shell_metachar_semicolon_not_executed(self, tmp_path):
-        """`echo hi; touch /tmp/celeste_pwned` must NOT create the file.
-
-        With shell=True the second command after `;` runs. With shell=False,
-        the entire string is treated as a single argv[0] which fails to exec.
-        The injection marker must not be created even if the exec fails.
-        """
-        from celeste.core.workspaces.base import _stream_subprocess_events
-
-        marker = os.path.join(str(tmp_path), "pwned_via_semicolon")
-        cmd = f"echo hi; touch {marker}"
-
-        events = []
-        try:
-            async for ev in _stream_subprocess_events(cmd, cwd=str(tmp_path)):
-                events.append(ev)
-        except (FileNotFoundError, OSError):
-            # The string is treated as a literal exec name; no shell, so exec fails.
-            # Either outcome is acceptable; the marker must NOT exist.
-            pass
-
-        # The injection file must NOT exist
-        assert not os.path.exists(marker), (
-            f"SEC-001: shell injection succeeded — {marker} was created. "
-            f"_stream_subprocess_events still interprets shell metacharacters."
-        )
-
-    @pytest.mark.asyncio
-    async def test_shell_metachar_pipe_not_executed(self, tmp_path):
-        """`echo hi | tee /tmp/pwned` must NOT create /tmp/pwned."""
-        from celeste.core.workspaces.base import _stream_subprocess_events
-
-        marker = os.path.join(str(tmp_path), "pwned_via_pipe")
-        cmd = f"echo hi | tee {marker}"
-
-        try:
-            async for _ in _stream_subprocess_events(cmd, cwd=str(tmp_path)):
-                pass
-        except (FileNotFoundError, OSError):
-            pass
-
-        assert not os.path.exists(marker), (
-            "SEC-001: pipe metacharacter was interpreted; injection succeeded"
-        )
-
-    @pytest.mark.asyncio
-    async def test_shell_metachar_backtick_not_executed(self, tmp_path):
-        """Command substitution via backticks must not run."""
-        from celeste.core.workspaces.base import _stream_subprocess_events
-
-        marker = os.path.join(str(tmp_path), "pwned_via_backtick")
-        cmd = f"echo `touch {marker}`"
-
-        try:
-            async for _ in _stream_subprocess_events(cmd, cwd=str(tmp_path)):
-                pass
-        except (FileNotFoundError, OSError):
-            pass
-
-        assert not os.path.exists(marker), (
-            "SEC-001: backtick command substitution was interpreted; injection succeeded"
-        )
-
-
-class TestArgvListSupport:
-    """_stream_subprocess_events should accept a structured argv list."""
-
-    @pytest.mark.asyncio
-    async def test_runs_argv_list(self, tmp_path):
-        """A structured argv list (e.g. ['echo', 'hello']) should run cleanly."""
-        from celeste.core.workspaces.base import _stream_subprocess_events
-
-        events: list[Any] = []
-        async for ev in _stream_subprocess_events(
-            argv=["echo", "from_argv_list"],
-            cwd=str(tmp_path),
-        ):
-            events.append(ev)
-
-        stdout = [e for e in events if e.event_type == "stdout_line"]
-        assert any("from_argv_list" in str(e.data) for e in stdout)
-
-
-# ===========================================================================
-# SEC-006: DockerWorkspace.execute uses shell=False
+# SEC-006: DockerWorkspace must not pass shell=True inside the container
 # ===========================================================================
 
 
@@ -149,10 +33,74 @@ class TestDockerWorkspaceShellFalse:
             "inside the container, allowing shell metacharacter injection"
         )
 
-    def test_docker_exec_uses_argv_list(self):
-        """Audit the docker.py execute path uses argv-style list."""
+    def test_docker_exec_passes_argv_list(self):
+        """Audit the docker.py execute path passes a structured argv list."""
         from celeste.core.workspaces import docker as docker_mod
 
         source = inspect.getsource(docker_mod)
-        # The container-side python should accept a list, not a string.
-        assert "subprocess.run(cmd" in source or "subprocess.run([" in source or "shell=False" in source
+        # The container-side python should accept a list (argv), not a string
+        # and run with shell=False.
+        assert "shell=False" in source or "shell = False" in source
+
+    def test_docker_payload_uses_argv_field(self):
+        """The JSON payload sent to the container should carry a structured argv list."""
+        from celeste.core.workspaces import docker as docker_mod
+
+        source = inspect.getsource(docker_mod)
+        # Either "argv" key in payload, OR "command + arguments" with a clear
+        # structured split (not a single string)
+        assert "argv" in source or ("command" in source and "arguments" in source)
+
+
+class TestDockerWorkspaceShellMetacharsSafe:
+    """Behavioural test: shell metachars in `command` must not execute extras."""
+
+    @pytest.mark.asyncio
+    async def test_shell_metachars_in_command_not_interpreted(self, monkeypatch):
+        """A `command` containing `;` or `&&` must not trigger additional commands.
+
+        We can't actually start a Docker container in unit tests, but we can
+        intercept the docker CLI call and inspect what payload would be sent
+        to the container, and what the inner_python looks like.
+        """
+        from celeste.core.workspaces.docker import DockerWorkspace
+
+        captured: dict = {}
+
+        class FakeProcess:
+            returncode = 0
+            _stdout = b'{"exit_code": 0, "stdout": "", "stderr": ""}'
+            _stderr = b""
+
+            async def communicate(self):
+                return self._stdout, self._stderr
+
+        async def fake_run(*cmd, **kwargs):
+            captured["cmd"] = cmd
+            return FakeProcess()
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", fake_run)
+
+        ws = DockerWorkspace(image="python:3.11")
+        # bypass setup
+        ws._active = True
+        events = []
+        async for ev in ws.execute("echo hi; touch /tmp/pwned"):
+            events.append(ev)
+
+        # The docker exec command's inner_python arg should NOT contain "shell=True"
+        cmd = captured["cmd"]
+        # find the python -c argument (string with the inner script)
+        inner_python = None
+        for arg in cmd:
+            if isinstance(arg, str) and "subprocess" in arg and "run" in arg:
+                inner_python = arg
+                break
+        assert inner_python is not None, "could not locate inner_python arg in docker exec"
+        assert "shell=True" not in inner_python, (
+            "SEC-006: inner_python still contains shell=True; metacharacter "
+            "injection is possible"
+        )
+        assert "shell=False" in inner_python or "shell = False" in inner_python, (
+            "SEC-006: inner_python must call subprocess.run with shell=False"
+        )

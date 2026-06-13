@@ -78,15 +78,27 @@ class GitWorktreeWorkspace(BaseWorkspace):
         arguments: dict | None = None,
         env: dict | None = None,
     ) -> AsyncIterator[WorkspaceEvent]:
-        """Execute a command inside the worktree directory."""
+        """Execute a command inside the worktree directory.
+
+        If ``arguments`` contains an ``argv`` list, it is used directly as the
+        structured argv list (SEC-001: no shell interpretation). Otherwise the
+        single ``command`` string is passed as ``argv[0]``.
+        """
         if not self._active or self._worktree_path is None:
             raise RuntimeError("Workspace is not active. Call setup() first.")
 
-        async for event in _stream_subprocess_events(
-            command=command,
-            cwd=self._worktree_path,
-            env=env,
-        ):
+        argv_list = None
+        if isinstance(arguments, dict):
+            maybe_argv = arguments.get("argv")
+            if isinstance(maybe_argv, list) and all(isinstance(x, str) for x in maybe_argv):
+                argv_list = maybe_argv
+
+        if argv_list is not None:
+            stream_kwargs = {"argv": argv_list, "cwd": self._worktree_path, "env": env}
+        else:
+            stream_kwargs = {"command": command, "cwd": self._worktree_path, "env": env}
+
+        async for event in _stream_subprocess_events(**stream_kwargs):
             yield event
 
     async def teardown(self) -> None:

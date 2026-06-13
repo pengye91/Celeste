@@ -97,6 +97,10 @@ class DockerWorkspace(BaseWorkspace):
     ) -> AsyncIterator[WorkspaceEvent]:
         """Execute a command inside the running Docker container.
 
+        Security (SEC-006): the inner script runs subprocess.run with
+        shell=False on a structured argv list. Shell metacharacters in
+        ``command`` are not interpreted.
+
         Yields WorkspaceEvent for stdout/stderr lines and completion status.
         """
         if not self._active:
@@ -105,15 +109,23 @@ class DockerWorkspace(BaseWorkspace):
         args = arguments or {}
         env = env or {}
 
+        # Build a structured argv list. If `arguments` already provides a list
+        # of strings under an "argv" key, use it. Otherwise treat the single
+        # `command` string as argv[0] (no shell).
+        argv_list = args.get("argv") if isinstance(args, dict) else None
+        if not (isinstance(argv_list, list) and all(isinstance(x, str) for x in argv_list)):
+            argv_list = [command]
+
         # Build a JSON-serialisable payload so the container can parse it.
-        payload = json.dumps({"command": command, "arguments": args, "env": env})
+        payload = json.dumps({"argv": argv_list, "env": env})
 
         # Use python -c inside the container to run the command safely.
+        # shell=False, argv list — no shell metacharacter interpretation.
         inner_python = (
             "import json, subprocess, sys; "
             "data = json.loads(sys.argv[1]); "
-            "cmd = data['command']; "
-            "proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, env={**dict(__import__('os').environ), **data.get('env', {})}); "
+            "argv = data.get('argv', []); "
+            "proc = subprocess.run(argv, shell=False, capture_output=True, text=True, env={**dict(__import__('os').environ), **data.get('env', {})}); "
             "print(json.dumps({'exit_code': proc.returncode, 'stdout': proc.stdout, 'stderr': proc.stderr}))"
         )
 

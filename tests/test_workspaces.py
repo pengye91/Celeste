@@ -243,7 +243,9 @@ class TestLocalTmpExecute:
         """Execute a simple echo command and collect stdout events."""
         await local_ws.setup()
         events = []
-        async for event in local_ws.execute("echo hello"):
+        async for event in local_ws.execute(
+            "echo", arguments={"argv": ["echo", "hello"]}
+        ):
             events.append(event)
 
         await local_ws.teardown()
@@ -261,7 +263,10 @@ class TestLocalTmpExecute:
         """Multi-line output should produce multiple stdout_line events."""
         await local_ws.setup()
         events = []
-        async for event in local_ws.execute("echo line1 && echo line2 && echo line3"):
+        async for event in local_ws.execute(
+            "sh",
+            arguments={"argv": ["sh", "-c", "echo line1; echo line2; echo line3"]},
+        ):
             events.append(event)
 
         await local_ws.teardown()
@@ -277,7 +282,9 @@ class TestLocalTmpExecute:
         """A command that exits non-zero should produce execution_failed."""
         await local_ws.setup()
         events = []
-        async for event in local_ws.execute("exit 1"):
+        async for event in local_ws.execute(
+            "sh", arguments={"argv": ["sh", "-c", "exit 1"]}
+        ):
             events.append(event)
 
         await local_ws.teardown()
@@ -290,7 +297,10 @@ class TestLocalTmpExecute:
         """Stderr output should appear as events."""
         await local_ws.setup()
         events = []
-        async for event in local_ws.execute("echo error_msg >&2"):
+        async for event in local_ws.execute(
+            "sh",
+            arguments={"argv": ["sh", "-c", "echo error_msg >&2"]},
+        ):
             events.append(event)
 
         await local_ws.teardown()
@@ -306,7 +316,8 @@ class TestLocalTmpExecute:
         await local_ws.setup()
         events = []
         async for event in local_ws.execute(
-            "echo $MY_TEST_VAR",
+            "sh",
+            arguments={"argv": ["sh", "-c", "echo $MY_TEST_VAR"]},
             env={"MY_TEST_VAR": "test_value_123"},
         ):
             events.append(event)
@@ -323,7 +334,7 @@ class TestLocalTmpExecute:
         await local_ws.setup()
         ws_path = await local_ws.get_workspace_path()
         events = []
-        async for event in local_ws.execute("pwd"):
+        async for event in local_ws.execute("pwd", arguments={"argv": ["pwd"]}):
             events.append(event)
 
         await local_ws.teardown()
@@ -337,7 +348,10 @@ class TestLocalTmpExecute:
     async def test_execute_writes_files_in_workspace(self, local_ws):
         """Commands can create files that persist in the workspace dir."""
         await local_ws.setup()
-        async for _ in local_ws.execute("echo content > test_file.txt"):
+        async for _ in local_ws.execute(
+            "sh",
+            arguments={"argv": ["sh", "-c", "echo content > test_file.txt"]},
+        ):
             pass
 
         ws_path = await local_ws.get_workspace_path()
@@ -381,7 +395,9 @@ class TestLocalTmpContextManager:
         ws = LocalTmpWorkspace()
         async with ws:
             events = []
-            async for event in ws.execute("echo inside_context"):
+            async for event in ws.execute(
+                "echo", arguments={"argv": ["echo", "inside_context"]}
+            ):
                 events.append(event)
 
             stdout_events = [e for e in events if e.event_type == "stdout_line"]
@@ -497,7 +513,9 @@ class TestGitWorktreeExecute:
         await ws.setup()
 
         events = []
-        async for event in ws.execute("echo worktree_hello"):
+        async for event in ws.execute(
+            "echo", arguments={"argv": ["echo", "worktree_hello"]}
+        ):
             events.append(event)
 
         stdout_events = [e for e in events if e.event_type == "stdout_line"]
@@ -716,22 +734,32 @@ class TestLocalTmpIntegration:
         ws_path = await ws.get_workspace_path()
 
         # Create a file
-        async for _ in ws.execute("echo 'hello' > file1.txt"):
+        async for _ in ws.execute(
+            "sh",
+            arguments={"argv": ["sh", "-c", "echo 'hello' > file1.txt"]},
+        ):
             pass
         assert os.path.exists(os.path.join(ws_path, "file1.txt"))
 
         # Read it back
         events = []
-        async for event in ws.execute("cat file1.txt"):
+        async for event in ws.execute(
+            "cat", arguments={"argv": ["cat", "file1.txt"]}
+        ):
             events.append(event)
         stdout = " ".join(e.data for e in events if e.event_type == "stdout_line")
         assert "hello" in stdout
 
         # Modify and verify
-        async for _ in ws.execute("echo 'world' >> file1.txt"):
+        async for _ in ws.execute(
+            "sh",
+            arguments={"argv": ["sh", "-c", "echo 'world' >> file1.txt"]},
+        ):
             pass
         events = []
-        async for event in ws.execute("cat file1.txt"):
+        async for event in ws.execute(
+            "cat", arguments={"argv": ["cat", "file1.txt"]}
+        ):
             events.append(event)
         stdout = " ".join(e.data for e in events if e.event_type == "stdout_line")
         assert "hello" in stdout
@@ -748,7 +776,10 @@ class TestLocalTmpIntegration:
         ws = LocalTmpWorkspace()
         async with ws:
             events = []
-            async for event in ws.execute("echo a && echo b && echo c"):
+            async for event in ws.execute(
+                "sh",
+                arguments={"argv": ["sh", "-c", "echo a; echo b; echo c"]},
+            ):
                 events.append(event)
 
             timestamps = [e.timestamp for e in events]
