@@ -20,8 +20,9 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Callable
 
-from fastapi import FastAPI, HTTPException, Query
-from sqlalchemy import select
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy import func, select
 
 from celeste.config.settings import EngineSettings
 from celeste.core.engine import Engine
@@ -104,6 +105,40 @@ def create_app(
     app.state.engine = engine
     app.state.running_tasks: dict[str, asyncio.Task] = {}
     app.state.agent_registry: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------
+    # Request-id middleware + global exception handler
+    # ------------------------------------------------------------------
+
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        """Attach a correlation id to every request and response."""
+        rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        request.state.request_id = rid
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        """Catch unhandled exceptions and return a structured error.
+
+        Logs the stack trace with the request id so failures are traceable.
+        """
+        rid = getattr(request.state, "request_id", None) or uuid.uuid4().hex
+        logger.exception(
+            "Unhandled exception on %s %s (request_id=%s)",
+            request.method, request.url.path, rid,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "internal_error",
+                "request_id": rid,
+                "error_type": exc.__class__.__name__,
+            },
+            headers={"X-Request-ID": rid},
+        )
 
     # ------------------------------------------------------------------
     # CORS middleware
@@ -211,14 +246,14 @@ def create_app(
                     )
                 stmt = stmt.where(Workflow.created_at > after_dt)
 
-            # Total count
-            count_stmt = select(Workflow)
+            # Total count using SQL COUNT(*) — do not materialise all rows.
+            count_stmt = select(func.count()).select_from(Workflow)
             if status is not None:
                 count_stmt = count_stmt.where(Workflow.status == status_enum)
             if created_after is not None:
                 count_stmt = count_stmt.where(Workflow.created_at > after_dt)
             total_result = await session.execute(count_stmt)
-            total = len(total_result.scalars().all())
+            total = total_result.scalar_one()
 
             stmt = stmt.order_by(Workflow.created_at.desc()).offset(offset).limit(limit)
             result = await session.execute(stmt)
@@ -285,14 +320,21 @@ def create_app(
         tags=["workflows"],
     )
     async def execute_workflow(workflow_id: str):
-        """Start executing a submitted workflow."""
+        """Start executing a submitted workflow.
+
+        Uses an atomic UPDATE workflow SET status='running'
+        WHERE id=:id AND status IN ('pending', 'paused') guard so that
+        duplicate concurrent /execute calls cannot both succeed.
+        """
         try:
             wf_uuid = uuid.UUID(workflow_id)
         except ValueError:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
-        # Verify workflow exists
+        # Atomic status guard: only flip pending/paused -> running.
         async with get_session() as session:
+            from sqlalchemy import update as _sa_update
+
             result = await session.execute(
                 select(Workflow).where(Workflow.id == wf_uuid)
             )
@@ -300,39 +342,126 @@ def create_app(
             if wf is None:
                 raise HTTPException(status_code=404, detail="Workflow not found")
 
+            stmt = (
+                _sa_update(Workflow)
+                .where(
+                    Workflow.id == wf_uuid,
+                    Workflow.status.in_(
+                        (WorkflowStatus.PENDING, WorkflowStatus.PAUSED)
+                    ),
+                )
+                .values(status=WorkflowStatus.RUNNING)
+            )
+            res = await session.execute(stmt)
+            await session.commit()
+
+            if res.rowcount == 0:
+                # Either not found (already handled) or status not pending/paused.
+                # Re-fetch to give a precise 409 message.
+                result = await session.execute(
+                    select(Workflow).where(Workflow.id == wf_uuid)
+                )
+                wf = result.scalar_one_or_none()
+                if wf is None:
+                    raise HTTPException(status_code=404, detail="Workflow not found")
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot execute workflow in '{wf.status.value}' state; "
+                        "only pending or paused workflows can be executed."
+                    ),
+                )
+
         # Run workflow in background so the API returns immediately
         def _on_task_done(task: asyncio.Task) -> None:
-            """Done-callback that catches exceptions from background tasks."""
+            """Done-callback that cleans up state and records exceptions.
+
+            Always removes the task from running_tasks to prevent unbounded
+            growth (api-20). On failure, emits a NODE_FAILED WorkflowEvent
+            (api-15) and marks the workflow FAILED.
+            """
+            key = str(wf_uuid)
+            try:
+                # api-20: always remove on completion, regardless of outcome.
+                app.state.running_tasks.pop(key, None)
+            except Exception:
+                logger.error("Failed to pop %s from running_tasks", key)
+
             if task.cancelled():
                 return
-            if exc := task.exception():
-                logger.error(
-                    "Workflow %s failed with unhandled exception: %s",
-                    workflow_id, exc,
-                )
-                # Best effort: update workflow status to failed
-                try:
-                    import asyncio as _aio
-                    loop = _aio.get_event_loop()
-                    if loop.is_running():
-                        loop.create_task(_mark_workflow_failed(wf_uuid))
-                except Exception:
-                    logger.error(
-                        "Could not mark workflow %s as failed", workflow_id,
-                    )
+            exc = task.exception()
+            if exc is None:
+                return
+            logger.error(
+                "Workflow %s failed with unhandled exception: %s",
+                workflow_id, exc,
+            )
 
-        async def _mark_workflow_failed(wf_id: uuid.UUID) -> None:
-            """Best-effort update of workflow status to failed."""
+            # api-15: emit a NODE_FAILED WorkflowEvent so the failure is
+            # part of the audit trail. Best-effort: if the engine already
+            # wrote a terminal status, this is still informative.
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(_mark_workflow_failed(wf_uuid, exc))
+            except Exception:
+                logger.error(
+                    "Could not schedule failure handler for %s", workflow_id,
+                )
+
+        async def _mark_workflow_failed(wf_id: uuid.UUID, exc: BaseException) -> None:
+            """Best-effort update of workflow status to FAILED + emit NODE_FAILED event."""
             try:
                 async with get_session() as session:
                     result = await session.execute(
                         select(Workflow).where(Workflow.id == wf_id)
                     )
                     workflow = result.scalar_one_or_none()
-                    if workflow is not None:
+                    if workflow is None:
+                        return
+                    # Only mark FAILED if not already in a terminal state.
+                    if workflow.status not in (
+                        WorkflowStatus.COMPLETED,
+                        WorkflowStatus.FAILED,
+                        WorkflowStatus.CANCELLED,
+                    ):
                         workflow.status = WorkflowStatus.FAILED
+
+                    # Attach NODE_FAILED event to a real node (FK NOT NULL).
+                    nodes_result = await session.execute(
+                        select(TaskNode).where(TaskNode.workflow_id == wf_id).limit(1)
+                    )
+                    node = nodes_result.scalar_one_or_none()
+                    target_node_id = node.id if node else wf_id
+                    if node is None:
+                        # No node exists yet — use workflow_id as a synthetic
+                        # node id? The FK requires a real TaskNode. Skip
+                        # emitting the event in that rare case.
+                        return
+
+                    seq_result = await session.execute(
+                        select(WorkflowEvent)
+                        .where(WorkflowEvent.workflow_id == wf_id)
+                        .order_by(WorkflowEvent.sequence_number.desc())
+                        .limit(1)
+                    )
+                    last_event = seq_result.scalar_one_or_none()
+                    next_seq = (last_event.sequence_number + 1) if last_event else 1
+                    session.add(
+                        WorkflowEvent(
+                            workflow_id=wf_id,
+                            task_node_id=target_node_id,
+                            event_type=TaskEventType.NODE_FAILED,
+                            sequence_number=next_seq,
+                            event_data={
+                                "error": exc.__class__.__name__,
+                                "message": str(exc),
+                            },
+                        )
+                    )
+                    await session.commit()
             except Exception:
-                logger.error("Failed to update workflow %s status", wf_id)
+                logger.exception("Failed to mark workflow %s as failed", wf_id)
 
         task = asyncio.create_task(engine.run_workflow(wf_uuid))
         task.add_done_callback(_on_task_done)
@@ -418,11 +547,11 @@ def create_app(
             if wf is None:
                 raise HTTPException(status_code=404, detail="Workflow not found")
 
-            # Build query
+            # Build query — order by (timestamp, id) for deterministic tiebreaker.
             stmt = (
                 select(TaskEvent)
                 .where(TaskEvent.workflow_id == wf_uuid)
-                .order_by(TaskEvent.timestamp.asc())
+                .order_by(TaskEvent.timestamp.asc(), TaskEvent.id.asc())
             )
 
             if event_type is not None:
@@ -469,9 +598,15 @@ def create_app(
         workflow_id: str,
         event_type: str | None = Query(default=None),
         since_id: str | None = Query(default=None),
+        since_seq: int | None = Query(default=None, ge=0),
         limit: int = Query(default=50, ge=1, le=500),
     ):
-        """Get WorkflowEvent rows for a workflow with optional cursor and type filter."""
+        """Get WorkflowEvent rows for a workflow with optional cursor and type filter.
+
+        ``since_seq`` is the recommended cursor (uses WorkflowEvent.sequence_number
+        which is monotonic). ``since_id`` is retained for backwards compatibility
+        but should not be used for pagination because UUIDv4 ordering is random.
+        """
         try:
             wf_uuid = uuid.UUID(workflow_id)
         except ValueError:
@@ -485,10 +620,14 @@ def create_app(
             if wf is None:
                 raise HTTPException(status_code=404, detail="Workflow not found")
 
+            # Order by (sequence_number, timestamp) for stable ordering.
             stmt = (
                 select(WorkflowEvent)
                 .where(WorkflowEvent.workflow_id == wf_uuid)
-                .order_by(WorkflowEvent.timestamp.asc())
+                .order_by(
+                    WorkflowEvent.sequence_number.asc(),
+                    WorkflowEvent.timestamp.asc(),
+                )
             )
 
             if event_type is not None:
@@ -501,7 +640,9 @@ def create_app(
                     )
                 stmt = stmt.where(WorkflowEvent.event_type == evt_enum)
 
-            if since_id is not None:
+            if since_seq is not None:
+                stmt = stmt.where(WorkflowEvent.sequence_number > since_seq)
+            elif since_id is not None:
                 try:
                     since_uuid = uuid.UUID(since_id)
                 except ValueError:
@@ -548,26 +689,22 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Workflow not found")
 
             # Cycle count: plan_generated WorkflowEvent rows (or TaskEvent if needed)
-            cycle_result = await session.execute(
-                select(WorkflowEvent).where(
-                    WorkflowEvent.workflow_id == wf_uuid,
-                    WorkflowEvent.event_type == TaskEventType.PLAN_GENERATED,
-                )
+            cycle_count_q = select(func.count()).select_from(WorkflowEvent).where(
+                WorkflowEvent.workflow_id == wf_uuid,
+                WorkflowEvent.event_type == TaskEventType.PLAN_GENERATED,
             )
-            cycle_count = len(cycle_result.scalars().all())
+            cycle_count = (await session.execute(cycle_count_q)).scalar_one()
 
-            # Node counts from TaskNode
-            nodes_result = await session.execute(
-                select(TaskNode).where(TaskNode.workflow_id == wf_uuid)
+            # Node counts from TaskNode (one COUNT aggregate, grouped by status)
+            node_count_q = (
+                select(TaskNode.status, func.count())
+                .where(TaskNode.workflow_id == wf_uuid)
+                .group_by(TaskNode.status)
             )
-            nodes = nodes_result.scalars().all()
-            total_nodes = len(nodes)
-            completed_nodes = sum(
-                1 for n in nodes if n.status == TaskNodeStatus.COMPLETED
-            )
-            failed_nodes = sum(
-                1 for n in nodes if n.status == TaskNodeStatus.FAILED
-            )
+            node_counts = dict((await session.execute(node_count_q)).all())
+            total_nodes = sum(node_counts.values())
+            completed_nodes = node_counts.get(TaskNodeStatus.COMPLETED, 0)
+            failed_nodes = node_counts.get(TaskNodeStatus.FAILED, 0)
             completed_percent = (
                 (completed_nodes / total_nodes * 100) if total_nodes > 0 else 0.0
             )
@@ -648,11 +785,15 @@ def create_app(
         limit: int = Query(default=50, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
     ):
-        """Global event stream combining TaskEvent and WorkflowEvent, newest first."""
+        """Global event stream combining TaskEvent and WorkflowEvent, newest first.
+
+        Ordering is by (timestamp DESC, id ASC) so events with identical
+        timestamps have a stable, deterministic order across pages.
+        """
         async with get_session() as session:
             task_stmt = (
                 select(TaskEvent)
-                .order_by(TaskEvent.timestamp.desc())
+                .order_by(TaskEvent.timestamp.desc(), TaskEvent.id.asc())
                 .limit(limit + offset)
             )
             task_result = await session.execute(task_stmt)
@@ -660,7 +801,7 @@ def create_app(
 
             wf_stmt = (
                 select(WorkflowEvent)
-                .order_by(WorkflowEvent.timestamp.desc())
+                .order_by(WorkflowEvent.timestamp.desc(), WorkflowEvent.id.asc())
                 .limit(limit + offset)
             )
             wf_result = await session.execute(wf_stmt)
@@ -671,6 +812,7 @@ def create_app(
                 combined.append(
                     (
                         e.timestamp,
+                        str(e.id),
                         GlobalEventResponse(
                             id=str(e.id),
                             event_source="task",
@@ -685,6 +827,7 @@ def create_app(
                 combined.append(
                     (
                         e.timestamp,
+                        str(e.id),
                         GlobalEventResponse(
                             id=str(e.id),
                             event_source="workflow",
@@ -696,9 +839,14 @@ def create_app(
                     )
                 )
 
-            combined.sort(key=lambda x: x[0], reverse=True)
+            # Sort by timestamp DESC; ties broken by id ASC for deterministic ordering.
+            # We use two passes: first by id (stable) to get a deterministic
+            # tiebreaker, then by timestamp DESC. The secondary sort produces
+            # a stable total ordering across pages.
+            combined.sort(key=lambda x: x[1])  # secondary: id ASC
+            combined.sort(key=lambda x: x[0], reverse=True)  # primary: ts DESC
             paginated = combined[offset : offset + limit]
-            return [item[1] for item in paginated]
+            return [item[2] for item in paginated]
 
     # ------------------------------------------------------------------
     # GET /api/workflows/{workflow_id}/nodes
@@ -751,17 +899,17 @@ def create_app(
         tags=["workflows"],
     )
     async def cancel_workflow(workflow_id: str):
-        """Cancel a running workflow."""
+        """Cancel a running workflow.
+
+        Existence check is performed FIRST so a non-existent UUID never
+        mutates app.state.running_tasks on the error path.
+        """
         try:
             wf_uuid = uuid.UUID(workflow_id)
         except ValueError:
             raise HTTPException(status_code=404, detail="Workflow not found")
 
-        # Cancel the running asyncio.Task if one exists
-        if str(wf_uuid) in app.state.running_tasks:
-            app.state.running_tasks[str(wf_uuid)].cancel()
-            del app.state.running_tasks[str(wf_uuid)]
-
+        # Existence check first — before mutating running_tasks.
         async with get_session() as session:
             result = await session.execute(
                 select(Workflow).where(Workflow.id == wf_uuid)
@@ -778,6 +926,12 @@ def create_app(
                 )
 
             wf.status = WorkflowStatus.CANCELLED
+            await session.commit()
+
+        # Only after the DB transition succeeds, cancel the asyncio.Task.
+        task = app.state.running_tasks.pop(str(wf_uuid), None)
+        if task is not None and not task.done():
+            task.cancel()
 
         return WorkflowResponse(workflow_id=workflow_id, status="cancelled")
 

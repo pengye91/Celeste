@@ -12,21 +12,21 @@ from pydantic import BaseModel, Field
 class DAGNodeInput(BaseModel):
     """Input schema for a single DAG node in a workflow creation request."""
 
-    name: str
-    task_type: str
-    command: str
+    name: str = Field(max_length=255)
+    task_type: str = Field(max_length=64)
+    command: str = Field(max_length=8192)
     arguments: dict = Field(default_factory=dict)
-    dependencies: list[str] = Field(default_factory=list)
-    compensation_command: str | None = None
+    dependencies: list[str] = Field(default_factory=list, max_length=1000)
+    compensation_command: str | None = Field(default=None, max_length=8192)
     compensation_arguments: dict | None = None
 
 
 class CreateWorkflowRequest(BaseModel):
     """Request body for POST /api/workflows."""
 
-    name: str
-    description: str = ""
-    nodes: list[DAGNodeInput] = Field(min_length=1)
+    name: str = Field(max_length=255)
+    description: str = Field(default="", max_length=2048)
+    nodes: list[DAGNodeInput] = Field(min_length=1, max_length=1000)
     variables: dict = Field(default_factory=dict)
 
 
