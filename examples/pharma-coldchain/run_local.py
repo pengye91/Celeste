@@ -39,6 +39,12 @@ from celeste.toolkits.system_data import SystemDataToolkit
 # the agent below so the planner can discover and invoke all four tools.
 from examples.pharma_coldchain.tools.pharma_toolkit import PharmaColdChainToolkit
 
+# Seed data loader — populates the pharma tables (telemetry_log, hubs,
+# batches, …) so the cold_chain tool's SQL queries succeed. Loading is
+# best-effort: failures are logged but do not abort the run, so engine
+# bugs stay visible.
+from examples.pharma_coldchain.seed_data.load import load_seed_data
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
@@ -184,6 +190,31 @@ async def run_pharma_local(
     # 6. Run engine
     # ------------------------------------------------------------------
     engine = Engine(settings=settings)
+
+    # ------------------------------------------------------------------
+    # 6a. Load pharma seed data BEFORE engine.start().
+    #
+    # cold_chain.check_temperature_excursion() (and other pharma tools)
+    # query telemetry_log / hubs / batches / etc. directly. Without this
+    # step the OPA loop catches ``no such table: telemetry_log`` per cycle
+    # and re-plans the same node indefinitely.
+    #
+    # Seed loading is best-effort: a failure logs a warning and lets the
+    # engine continue, so a seed-load bug doesn't mask a real engine bug.
+    # ------------------------------------------------------------------
+    try:
+        db_url = settings.DATABASE_URL.get_secret_value()
+        seed_dir = Path(__file__).resolve().parent / "seed_data"
+        logger.info("Loading pharma seed data from %s into %s", seed_dir, db_url)
+        seed_counts = await load_seed_data(db_url, seed_dir)
+        logger.info("Seed data loaded: %s", seed_counts)
+    except Exception as exc:
+        logger.warning(
+            "Pharma seed data load failed; cold_chain SQL queries may fail. "
+            "Engine will still start. Cause: %s",
+            exc,
+        )
+
     await engine.start()
     logger.info("Engine started")
 
