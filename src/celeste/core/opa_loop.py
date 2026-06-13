@@ -75,8 +75,17 @@ class WorkflowExecutor:
         self._agent = agent
         self._security_auditor = security_auditor
 
-    async def execute_fragment(self, fragment: DAGFragment) -> dict[str, Any]:
+    async def execute_fragment(
+        self,
+        fragment: DAGFragment,
+        workflow_id: uuid.UUID | None = None,
+    ) -> dict[str, Any]:
         """Execute all nodes in the fragment sequentially.
+
+        When ``workflow_id`` is provided, each node's status transitions are
+        persisted to the corresponding ``TaskNode`` row and ``TaskEvent``
+        rows are emitted (``NODE_STARTED`` / ``NODE_COMPLETED`` / ``NODE_FAILED``),
+        mirroring the behaviour of ``engine._execute_node``.
 
         Returns a dict with:
             - completed: list of node names that succeeded
@@ -109,6 +118,14 @@ class WorkflowExecutor:
                 # Remaining nodes have unresolvable dependencies (cycle or missing)
                 for name in pending:
                     skipped.append(name)
+                    if workflow_id is not None:
+                        await self._mark_node_status(
+                            workflow_id,
+                            name,
+                            TaskNodeStatus.FAILED,
+                            TaskEventType.NODE_FAILED,
+                            event_data={"reason": "unresolvable_dependencies"},
+                        )
                 break
 
             for name in sorted(ready):
@@ -120,6 +137,14 @@ class WorkflowExecutor:
                 if dep_failed:
                     skipped.append(name)
                     executed.add(name)
+                    if workflow_id is not None:
+                        await self._mark_node_status(
+                            workflow_id,
+                            name,
+                            TaskNodeStatus.FAILED,
+                            TaskEventType.NODE_FAILED,
+                            event_data={"reason": "dependency_failed"},
+                        )
                     continue
 
                 # --- Security audit before execution ---
@@ -144,7 +169,27 @@ class WorkflowExecutor:
                     security_blocked.append(name)
                     failed.append(name)
                     executed.add(name)
+                    if workflow_id is not None:
+                        await self._mark_node_status(
+                            workflow_id,
+                            name,
+                            TaskNodeStatus.FAILED,
+                            TaskEventType.NODE_FAILED,
+                            event_data={
+                                "reason": "security_block",
+                                "audit_reason": verdict.reason if verdict else None,
+                            },
+                        )
                     continue
+
+                # --- Mark node RUNNING + emit NODE_STARTED before invoking the tool ---
+                if workflow_id is not None:
+                    await self._mark_node_status(
+                        workflow_id,
+                        name,
+                        TaskNodeStatus.RUNNING,
+                        TaskEventType.NODE_STARTED,
+                    )
 
                 try:
                     result = await self._agent.call_tool(
@@ -153,10 +198,33 @@ class WorkflowExecutor:
                     )
                     if isinstance(result, dict) and result.get("error"):
                         failed.append(name)
+                        if workflow_id is not None:
+                            await self._mark_node_status(
+                                workflow_id,
+                                name,
+                                TaskNodeStatus.FAILED,
+                                TaskEventType.NODE_FAILED,
+                                event_data={"error": result.get("error")},
+                            )
                     else:
                         completed.append(name)
-                except Exception:
+                        if workflow_id is not None:
+                            await self._mark_node_status(
+                                workflow_id,
+                                name,
+                                TaskNodeStatus.COMPLETED,
+                                TaskEventType.NODE_COMPLETED,
+                            )
+                except Exception as exc:
                     failed.append(name)
+                    if workflow_id is not None:
+                        await self._mark_node_status(
+                            workflow_id,
+                            name,
+                            TaskNodeStatus.FAILED,
+                            TaskEventType.NODE_FAILED,
+                            event_data={"error": str(exc)},
+                        )
 
                 executed.add(name)
 
@@ -167,6 +235,45 @@ class WorkflowExecutor:
             "security_blocked": security_blocked,
             "audit_results": audit_results,
         }
+
+    async def _mark_node_status(
+        self,
+        workflow_id: uuid.UUID,
+        node_name: str,
+        status: TaskNodeStatus,
+        event_type: TaskEventType,
+        event_data: dict[str, Any] | None = None,
+    ) -> None:
+        """Update a TaskNode's status and append a TaskEvent row.
+
+        Targets the most recently created TaskNode for this (workflow_id, name)
+        so replans that re-emit a previously-executed node still update the
+        freshest row. Uses a short-lived session per transition so we don't
+        hold a session open across an awaited tool call.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(TaskNode)
+                .where(
+                    TaskNode.workflow_id == workflow_id,
+                    TaskNode.name == node_name,
+                )
+                .order_by(TaskNode.created_at.desc(), TaskNode.id.desc())
+                .limit(1)
+            )
+            node = result.scalar_one_or_none()
+            if node is None:
+                # The fragment was planned but never persisted; nothing to do.
+                return
+            node.status = status
+            session.add(
+                TaskEvent(
+                    task_node_id=node.id,
+                    workflow_id=workflow_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +492,7 @@ class OPALoop:
 
             # -- 3. ACT -------------------------------------------------------
             # Tier 1: retry transient failures
-            exec_result = await self._execute_with_retries(fragment)
+            exec_result = await self._execute_with_retries(fragment, workflow_id=workflow_id)
 
             # Emit SECURITY_AUDIT events for each audited tool call.
             seq = await self._emit_security_audit_events(
@@ -756,7 +863,7 @@ class OPALoop:
 
             await self._persist_fragment(workflow_id, fragment)
 
-            exec_result = await self._execute_with_retries(fragment)
+            exec_result = await self._execute_with_retries(fragment, workflow_id=workflow_id)
 
             # Emit SECURITY_AUDIT events for each audited tool call.
             seq = await self._emit_security_audit_events(
@@ -1008,6 +1115,7 @@ class OPALoop:
         self,
         fragment: DAGFragment,
         max_retries: int = 3,
+        workflow_id: uuid.UUID | None = None,
     ) -> dict[str, Any]:
         """Execute a fragment with Tier 1 retry logic.
 
@@ -1021,7 +1129,10 @@ class OPALoop:
         original_fragment = fragment
 
         for attempt in range(max_retries + 1):
-            exec_result = await self._executor.execute_fragment(fragment)
+            exec_result = await self._executor.execute_fragment(
+                fragment,
+                workflow_id=workflow_id,
+            )
 
             # Accumulate successes and skips from this attempt.
             accumulated_completed.extend(exec_result.get("completed", []))
