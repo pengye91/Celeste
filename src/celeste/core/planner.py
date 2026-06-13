@@ -116,13 +116,18 @@ You are an expert workflow planner operating in an Observe-Plan-Act (OPA) loop.
 Your job is to plan the next batch of tasks given the current goal, environment \
 observation, available tools, and execution history.
 
-Toolkit preference:
+Toolkit preference — STRICT:
 - If a domain-specific toolkit is registered (e.g. pharma_coldchain, \
-financial_audit, custom_tools), prefer its tools over generic system tools for \
-the user's domain.
-- The toolkits listed first in the available tools section are the \
-domain-specific ones; the system_data toolkit is the generic baseline for \
-file/command reconnaissance. Use generic tools only when no domain tool fits.
+financial_audit, custom_tools), you MUST use it for the user's domain. Do NOT \
+use the generic system_data tools (read_file, list_directory, run_command, etc.) \
+to investigate the user's domain problem — those are for the planner's own \
+bootstrapping only.
+- The first toolkit listed in "Available tools" is the domain toolkit and \
+its tools are REQUIRED. Use the system_data toolkit ONLY for things the \
+domain toolkit cannot do (e.g. finding the user-request files on disk before \
+reading them).
+- Every plan fragment MUST call at least one tool from the domain-specific \
+toolkit if the user's goal is in that domain.
 
 Each node in the DAG represents a discrete step:
 - **llm_call**: Invoke an LLM with a prompt.
@@ -209,6 +214,22 @@ class Planner:
         tools_section = self._build_tools_section()
         system_prompt = _OPA_SYSTEM_PROMPT_TEMPLATE.format(tools_section=tools_section)
 
+        # Identify domain-specific tool names so we can detect when the LLM
+        # produces a plan that ignores the registered domain toolkit in
+        # favor of generic system_data tools.
+        domain_tool_names = {
+            t["name"]
+            for tk in self._toolkits
+            if tk.name != "system_data"
+            for t in tk.to_mcp_schemas()
+        }
+        system_tool_names = {
+            t["name"]
+            for tk in self._toolkits
+            if tk.name == "system_data"
+            for t in tk.to_mcp_schemas()
+        }
+
         messages: list[LLMMessage] = [LLMMessage(role="system", content=system_prompt)]
 
         parts: list[str] = [f"Goal:\n{goal}"]
@@ -224,8 +245,9 @@ class Planner:
         last_error: Exception | None = None
         # Reasoning models (e.g. MiniMax-M3, DeepSeek-R1) often burn a large
         # fraction of their output budget on <think> traces, then truncate
-        # the actual JSON. We retry once with a smaller, more directive
-        # prompt if the first response is truncated or fails to parse.
+        # the actual JSON. We retry with progressively more directive
+        # guidance if the first response is truncated, fails to parse, or
+        # produces a plan that ignores the registered domain toolkit.
         for attempt, (max_tokens, retry_suffix) in enumerate(
             (
                 (8192, ""),
@@ -235,6 +257,14 @@ class Planner:
                     "Respond with FEWER nodes (3-4) and minimal arguments so the "
                     "JSON fits in the budget. Output only the JSON object, no "
                     "narrative.",
+                ),
+                (
+                    8192,
+                    "\n\nYour previous plan used ONLY generic system_data tools "
+                    f"({', '.join(sorted(system_tool_names)[:6])}, etc.) and IGNORED the registered domain toolkit. "
+                    f"You MUST call at least one of: {', '.join(sorted(domain_tool_names))}. "
+                    "Do not call read_file, list_directory, or run_command to "
+                    "investigate the problem — use the domain tool instead.",
                 ),
             )
         ):
@@ -272,6 +302,21 @@ class Planner:
                     f"Planner output truncated at {max_tokens} tokens; retrying."
                 )
                 logger.warning(str(last_error))
+                continue
+
+            # If a domain toolkit is registered but the plan doesn't use any
+            # of its tools, treat as a soft failure and retry with a stronger
+            # directive. Reasoning models tend to default to environment
+            # reconnaissance, which is not what we want for a domain goal.
+            if domain_tool_names and not any(
+                n.command in domain_tool_names for n in fragment.nodes
+            ):
+                last_error = ValueError(
+                    f"Plan ignored registered domain toolkit "
+                    f"(expected at least one of: {sorted(domain_tool_names)}); "
+                    f"got: {[n.command for n in fragment.nodes]}"
+                )
+                logger.warning("Planner attempt %d: %s", attempt + 1, last_error)
                 continue
             break
         else:
@@ -355,6 +400,12 @@ class Planner:
 
         lines: list[str] = []
         for toolkit in ordered_toolkits:
+            toolkit_label = toolkit.name
+            if toolkit_label == "system_data":
+                toolkit_label = "system_data (generic baseline — use only when no domain tool fits)"
+            else:
+                toolkit_label = f"{toolkit_label} (domain-specific — REQUIRED for the user's goal)"
+            lines.append(f"\n[{toolkit_label}]")
             for t in toolkit.to_mcp_schemas():
                 lines.append(f"- {t['name']}: {t['description']}")
                 schema = t.get("inputSchema", {})

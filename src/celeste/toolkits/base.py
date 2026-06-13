@@ -158,5 +158,14 @@ class BaseToolkit(ABC):
         """
 
     def to_mcp_schemas(self) -> list[dict[str, Any]]:
-        """Convert all tools to MCP schemas."""
-        return [tool.to_mcp_schema() for tool in self.get_tools()]
+        """Convert all tools to MCP schemas.
+
+        Each schema is augmented with a ``_toolkit`` key carrying the toolkit
+        name so callers can group or filter tools by their source registry.
+        """
+        out: list[dict[str, Any]] = []
+        for tool in self.get_tools():
+            schema = tool.to_mcp_schema()
+            schema["_toolkit"] = self.name
+            out.append(schema)
+        return out

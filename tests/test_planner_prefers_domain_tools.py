@@ -39,7 +39,7 @@ from celeste.toolkits.base import (
 
 
 class _StubLLMClient(BaseLLMClient):
-    """Records structured_output calls and returns a trivial DAGFragment."""
+    """Records structured_output calls and returns a domain-tool-using fragment."""
 
     def __init__(self) -> None:
         self.structured_output_calls: list[dict[str, Any]] = []
@@ -51,11 +51,22 @@ class _StubLLMClient(BaseLLMClient):
         self, messages, response_model, **kwargs
     ) -> Any:
         from celeste.core.planner import DAGFragment
+        from celeste.core.planner import DAGNode
 
         self.structured_output_calls.append(
             {"messages": messages, "response_model": response_model}
         )
-        return DAGFragment.model_construct(nodes=[], reasoning="stub")
+        # Return a fragment that uses a domain tool (check_temperature_excursion)
+        # so the planner's domain-enforcement check passes.
+        node = DAGNode(
+            name="check_excursion_node",
+            task_type="tool_execution",
+            command="check_temperature_excursion",
+            arguments={"batch_id": "B-42"},
+        )
+        return DAGFragment.model_construct(
+            nodes=[node], reasoning="stub", goal_achieved=True
+        )
 
     async def close(self) -> None:
         pass
@@ -264,10 +275,14 @@ class TestPlannerPlanCallIncludesDomainDirective:
         assert "prefer" in lowered
         # The system_data toolkit is named as the generic baseline.
         assert "system_data" in content
-        # The domain tool must appear before the generic tool in the
-        # rendered available-tools list.
-        domain_idx = content.find("check_temperature_excursion")
-        system_idx = content.find("read_file")
+        # The available-tools section must list the domain tool before the
+        # generic tool. Find the "Available tools:" section and assert order
+        # there, to avoid false matches against the prose description.
+        avail_idx = content.find("Available tools:")
+        assert avail_idx != -1
+        section = content[avail_idx:]
+        domain_idx = section.find("check_temperature_excursion")
+        system_idx = section.find("read_file")
         assert domain_idx != -1 and system_idx != -1
         assert domain_idx < system_idx, (
             "domain tool must be listed before read_file in the "
