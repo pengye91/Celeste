@@ -452,9 +452,18 @@ class TestRecordCheckpointEvent:
                 select(WorkflowEvent).where(WorkflowEvent.workflow_id == wf_id)
             )
             events = result.scalars().all()
-            assert len(events) == 1
-            assert events[0].event_type == TaskEventType.CHECKPOINT
-            assert events[0].event_data == checkpoint_state
+            # OBS-006: record_checkpoint_event now emits BOTH CHECKPOINT
+            # and STATE_CHECKPOINT rows.
+            assert len(events) == 2
+            event_types = {e.event_type for e in events}
+            assert TaskEventType.CHECKPOINT in event_types
+            assert TaskEventType.STATE_CHECKPOINT in event_types
+            checkpoint_event = next(e for e in events if e.event_type == TaskEventType.CHECKPOINT)
+            # OBS-006: CHECKPOINT event_data includes state_hash in addition
+            # to the original state fields.
+            for k, v in checkpoint_state.items():
+                assert checkpoint_event.event_data[k] == v
+            assert "state_hash" in checkpoint_event.event_data
 
     @pytest.mark.asyncio
     async def test_record_preserves_checkpoint_data(self, settings):
@@ -495,7 +504,11 @@ class TestRecordCheckpointEvent:
                 )
             )
             event = result.scalar_one()
-            assert event.event_data == checkpoint_state
+            # OBS-006: CHECKPOINT event_data preserves the original state
+            # fields and adds a state_hash key.
+            for k, v in checkpoint_state.items():
+                assert event.event_data[k] == v
+            assert "state_hash" in event.event_data
 
 
 # ---------------------------------------------------------------------------

@@ -801,6 +801,7 @@ class TestTaskEventTypeEnum:
             "state_checkpoint",
             "workflow_submitted",
             "workflow_completed",
+            "workflow_failed",
             "observation_captured",
             "plan_generated",
             "evaluation_result",
@@ -817,7 +818,7 @@ class TestTaskEventTypeEnum:
         }
         actual = {e.value for e in TaskEventType}
         assert actual == expected
-        assert len(TaskEventType) == 22
+        assert len(TaskEventType) == 23
 
     def test_task_event_type_has_new_opa_values(self):
         """New OPA loop event types must be present in TaskEventType."""
