@@ -206,5 +206,11 @@ class Evaluator:
         )
 
         decision = self._parse_response(response.content)
+        # OBS-022: Surface LLMResponse metadata on the decision so OPALoop can
+        # accumulate evaluator token usage and detect truncated evaluations.
+        # Mirrors the planner's `fragment._usage` convention.
+        decision.usage = dict(response.usage) if response.usage else {}
+        decision.finish_reason = response.finish_reason
+        decision.model = response.model
         self._set_cached(cache_key, decision)
         return decision

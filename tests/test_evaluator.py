@@ -374,3 +374,60 @@ class TestEvaluatorPrompt:
 
         call = client.complete_calls[0]
         assert call["temperature"] == 0.0
+
+    @pytest.mark.asyncio()
+    async def test_evaluator_exposes_llm_response_metadata(self, monkeypatch):
+        """OBS-022: Evaluator.evaluate currently discards the LLMResponse,
+        so OPALoop cannot accumulate evaluator token usage or surface
+        finish_reason. The fix is to attach usage / finish_reason / model
+        to the returned EvaluatorDecision (mirroring the planner's
+        ``fragment._usage`` pattern), so cost dashboards and budget checks
+        can include evaluator calls.
+        """
+        from celeste.core.evaluator import Evaluator
+
+        class _MetadataStub(BaseLLMClient):
+            def __init__(self) -> None:
+                self.calls: int = 0
+
+            async def complete(
+                self,
+                messages,
+                *,
+                model=None,
+                temperature=0.7,
+                max_tokens=4096,
+                tools=None,
+            ):
+                self.calls += 1
+                return LLMResponse(
+                    content="DONE\nGoal achieved.",
+                    model="stub-meta",
+                    usage={
+                        "prompt_tokens": 12,
+                        "completion_tokens": 7,
+                        "total_tokens": 19,
+                    },
+                    finish_reason="stop",
+                )
+
+            async def close(self) -> None:
+                pass
+
+        client = _MetadataStub()
+        evaluator = Evaluator(client)
+        fragment = _MockFragment([{"name": "task1", "status": "completed"}])
+
+        decision = await evaluator.evaluate(fragment, goal="Complete the workflow")
+
+        # OBS-022: usage and finish_reason must survive evaluate() so that
+        # OPALoop can accumulate evaluator token usage and detect truncated
+        # evaluations.
+        usage = getattr(decision, "usage", None)
+        assert usage is not None, "OBS-022: EvaluatorDecision must carry .usage"
+        assert usage["total_tokens"] == 19, (
+            f"OBS-022: usage.total_tokens={usage.get('total_tokens')!r}, expected 19"
+        )
+        assert getattr(decision, "finish_reason", None) == "stop", (
+            "OBS-022: EvaluatorDecision must carry .finish_reason"
+        )
