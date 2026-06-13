@@ -25,7 +25,7 @@ import Eye from "lucide-react/dist/esm/icons/eye";
 import Play from "lucide-react/dist/esm/icons/play";
 import Square from "lucide-react/dist/esm/icons/square";
 import Link from "next/link";
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 
 // ------------------------------------------------------------------
 // Types
@@ -197,6 +197,18 @@ function buildLifecycleRows(
 // ------------------------------------------------------------------
 
 export default function WorkspacesPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  return (
+    <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
+      <WorkspacesPageInner params={params} />
+    </Suspense>
+  );
+}
+
+function WorkspacesPageInner({
   params,
 }: {
   params: { id: string };

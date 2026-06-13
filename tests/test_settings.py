@@ -31,7 +31,33 @@ def _reset_settings_singleton():
 # ---------------------------------------------------------------------------
 
 class TestDefaults:
-    """All fields must have correct default values."""
+    """All fields must have correct default values.
+
+    The TestDefaults class needs isolation from the project .env file
+    (and any LLM_* environment variables) so that the field defaults
+    declared in ``EngineSettings`` are actually what we observe.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_from_project_env(self, monkeypatch: pytest.MonkeyPatch):
+        """Construct EngineSettings without consulting the .env file or
+        any pre-existing LLM_* env vars, so the "default" values tested
+        here are the field defaults declared in the model itself."""
+        # Stub ``_env_file`` so the model never reads the project .env
+        with patch.object(
+            EngineSettings, "model_config", new={**EngineSettings.model_config, "env_file": None}
+        ):
+            for name in (
+                "ENVIRONMENT",
+                "DATABASE_URL",
+                "MAX_PARALLEL_SUBPROCESSES",
+                "LLM_PROVIDER",
+                "LLM_MODEL",
+                "LLM_API_KEY",
+                "LLM_BASE_URL",
+            ):
+                monkeypatch.delenv(name, raising=False)
+            yield
 
     def test_default_environment(self) -> None:
         s = EngineSettings()

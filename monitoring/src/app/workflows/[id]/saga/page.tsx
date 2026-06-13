@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import Link from "next/link";
 import { Shell } from "@/components/shell/shell";
 import { Panel } from "@/components/ui/panel";
@@ -523,6 +523,18 @@ function EmptyStateIllustration() {
    ─────────────────────────────────────────────── */
 
 export default function SagaCompensationPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  return (
+    <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
+      <SagaCompensationPageInner params={params} />
+    </Suspense>
+  );
+}
+
+function SagaCompensationPageInner({
   params,
 }: {
   params: { id: string };

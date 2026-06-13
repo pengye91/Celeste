@@ -39,6 +39,12 @@ from celeste.toolkits.system_data import SystemDataToolkit
 # the agent below so the planner can discover and invoke all four tools.
 from examples.pharma_coldchain.tools.pharma_toolkit import PharmaColdChainToolkit
 
+# Seed data loader — populates the pharma tables (telemetry_log, hubs,
+# batches, …) so the cold_chain tool's SQL queries succeed. Loading is
+# best-effort: failures are logged but do not abort the run, so engine
+# bugs stay visible.
+from examples.pharma_coldchain.seed_data.load import load_seed_data
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(name)s: %(message)s",
@@ -184,6 +190,31 @@ async def run_pharma_local(
     # 6. Run engine
     # ------------------------------------------------------------------
     engine = Engine(settings=settings)
+
+    # ------------------------------------------------------------------
+    # 6a. Load pharma seed data BEFORE engine.start().
+    #
+    # cold_chain.check_temperature_excursion() (and other pharma tools)
+    # query telemetry_log / hubs / batches / etc. directly. Without this
+    # step the OPA loop catches ``no such table: telemetry_log`` per cycle
+    # and re-plans the same node indefinitely.
+    #
+    # Seed loading is best-effort: a failure logs a warning and lets the
+    # engine continue, so a seed-load bug doesn't mask a real engine bug.
+    # ------------------------------------------------------------------
+    try:
+        db_url = settings.DATABASE_URL.get_secret_value()
+        seed_dir = Path(__file__).resolve().parent / "seed_data"
+        logger.info("Loading pharma seed data from %s into %s", seed_dir, db_url)
+        seed_counts = await load_seed_data(db_url, seed_dir)
+        logger.info("Seed data loaded: %s", seed_counts)
+    except Exception as exc:
+        logger.warning(
+            "Pharma seed data load failed; cold_chain SQL queries may fail. "
+            "Engine will still start. Cause: %s",
+            exc,
+        )
+
     await engine.start()
     logger.info("Engine started")
 
@@ -216,6 +247,64 @@ async def run_pharma_local(
                 logger.warning(
                     "Could not generate evaluation report: %s", exc
                 )
+    except Exception as exc:
+        # The OPA loop creates a Workflow row with status=RUNNING before
+        # the planner runs. If anything raises before the loop can flip the
+        # status (e.g. truncated JSON from the LLM), the row stays RUNNING
+        # forever and CMC shows a stuck workflow. Mark the row FAILED here
+        # so observers see the truth, then re-raise to preserve the
+        # original traceback.
+        logger.error(
+            "Engine crashed during pharma cold-chain workflow: %s", exc,
+            exc_info=True,
+        )
+        try:
+            from celeste.database.db import get_session
+            from celeste.database.models import (
+                Workflow,
+                WorkflowStatus,
+            )
+            from sqlalchemy import select
+            import uuid as _uuid
+
+            target_id: _uuid.UUID | None = None
+            if workflow_result is not None and workflow_result.workflow_id:
+                target_id = workflow_result.workflow_id
+            else:
+                # Workflow row may have been created but not yet surfaced
+                # back to us (e.g. crash before WorkflowResult returned).
+                # Fall back to the most-recent RUNNING workflow for this
+                # goal name as a best-effort.
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Workflow)
+                        .where(Workflow.name == goal)
+                        .where(Workflow.status == WorkflowStatus.RUNNING)
+                        .order_by(Workflow.created_at.desc())
+                        .limit(1)
+                    )
+                    wf = result.scalar_one_or_none()
+                    if wf is not None:
+                        target_id = wf.id
+
+            if target_id is not None:
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Workflow).where(Workflow.id == target_id)
+                    )
+                    wf = result.scalar_one_or_none()
+                    if wf is not None:
+                        wf.status = WorkflowStatus.FAILED
+                        logger.info(
+                            "Marked workflow %s as FAILED after crash",
+                            target_id,
+                        )
+        except Exception:
+            # Don't let cleanup mask the original exception.
+            logger.error(
+                "Failed to mark workflow FAILED after crash", exc_info=True,
+            )
+        raise
     finally:
         await engine.stop()
         logger.info("Engine stopped")

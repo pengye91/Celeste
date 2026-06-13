@@ -82,8 +82,6 @@ class TaskEventType(str, enum.Enum):
     PRECONDITION_CHECKED = "precondition_checked"
     CYCLE_STARTED = "cycle_started"
     CHECKPOINT = "checkpoint"
-
-    # Human-in-the-loop event types
     ESCALATE = "escalate"
     WORKFLOW_PAUSED = "workflow_paused"
     HUMAN_INPUT_RECEIVED = "human_input_received"
@@ -148,6 +146,11 @@ class Workflow(Base):
     )
     human_input: Mapped[str | None] = mapped_column(Text, nullable=True)
     paused_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    llm_tokens_accumulated: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
 
     # Relationships
     task_nodes: Mapped[list["TaskNode"]] = relationship(

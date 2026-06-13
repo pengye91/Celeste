@@ -113,7 +113,10 @@ def create_app(
 
     from fastapi.middleware.cors import CORSMiddleware
 
-    _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+    _cors_raw = os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
     _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
 
     app.add_middleware(
@@ -627,7 +630,7 @@ def create_app(
                 failed_nodes=failed_nodes,
                 completed_percent=completed_percent,
                 elapsed_seconds=elapsed_seconds,
-                llm_tokens_accumulated=None,
+                llm_tokens_accumulated=wf.llm_tokens_accumulated,
                 max_concurrent_workspaces=max_concurrent,
                 security_pass_rate=security_pass_rate,
             )

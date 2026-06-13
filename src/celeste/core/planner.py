@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from celeste.core.exceptions import PlannerTimeoutError
+logger = logging.getLogger(__name__)
 from celeste.core.llm.base import BaseLLMClient, LLMMessage
 from celeste.toolkits.base import BaseToolkit
 
@@ -114,6 +116,19 @@ You are an expert workflow planner operating in an Observe-Plan-Act (OPA) loop.
 Your job is to plan the next batch of tasks given the current goal, environment \
 observation, available tools, and execution history.
 
+Toolkit preference — STRICT:
+- If a domain-specific toolkit is registered (e.g. pharma_coldchain, \
+financial_audit, custom_tools), you MUST use it for the user's domain. Do NOT \
+use the generic system_data tools (read_file, list_directory, run_command, etc.) \
+to investigate the user's domain problem — those are for the planner's own \
+bootstrapping only.
+- The first toolkit listed in "Available tools" is the domain toolkit and \
+its tools are REQUIRED. Use the system_data toolkit ONLY for things the \
+domain toolkit cannot do (e.g. finding the user-request files on disk before \
+reading them).
+- Every plan fragment MUST call at least one tool from the domain-specific \
+toolkit if the user's goal is in that domain.
+
 Each node in the DAG represents a discrete step:
 - **llm_call**: Invoke an LLM with a prompt.
 - **tool_execution**: Run a registered tool.
@@ -199,6 +214,22 @@ class Planner:
         tools_section = self._build_tools_section()
         system_prompt = _OPA_SYSTEM_PROMPT_TEMPLATE.format(tools_section=tools_section)
 
+        # Identify domain-specific tool names so we can detect when the LLM
+        # produces a plan that ignores the registered domain toolkit in
+        # favor of generic system_data tools.
+        domain_tool_names = {
+            t["name"]
+            for tk in self._toolkits
+            if tk.name != "system_data"
+            for t in tk.to_mcp_schemas()
+        }
+        system_tool_names = {
+            t["name"]
+            for tk in self._toolkits
+            if tk.name == "system_data"
+            for t in tk.to_mcp_schemas()
+        }
+
         messages: list[LLMMessage] = [LLMMessage(role="system", content=system_prompt)]
 
         parts: list[str] = [f"Goal:\n{goal}"]
@@ -211,19 +242,92 @@ class Planner:
 
         messages.append(LLMMessage(role="user", content="\n\n".join(parts)))
 
-        try:
-            return await asyncio.wait_for(
-                self._client.structured_output(
-                    messages,
-                    DAGFragment,
-                    temperature=0.0,
+        last_error: Exception | None = None
+        # Reasoning models (e.g. MiniMax-M3, DeepSeek-R1) often burn a large
+        # fraction of their output budget on <think> traces, then truncate
+        # the actual JSON. We retry with progressively more directive
+        # guidance if the first response is truncated, fails to parse, or
+        # produces a plan that ignores the registered domain toolkit.
+        for attempt, (max_tokens, retry_suffix) in enumerate(
+            (
+                (8192, ""),
+                (
+                    12288,
+                    "\n\nIMPORTANT: Your previous output was truncated mid-JSON. "
+                    "Respond with FEWER nodes (3-4) and minimal arguments so the "
+                    "JSON fits in the budget. Output only the JSON object, no "
+                    "narrative.",
                 ),
-                timeout=timeout_ms / 1000.0,
+                (
+                    8192,
+                    "\n\nYour previous plan used ONLY generic system_data tools "
+                    f"({', '.join(sorted(system_tool_names)[:6])}, etc.) and IGNORED the registered domain toolkit. "
+                    f"You MUST call at least one of: {', '.join(sorted(domain_tool_names))}. "
+                    "Do not call read_file, list_directory, or run_command to "
+                    "investigate the problem — use the domain tool instead.",
+                ),
             )
-        except asyncio.TimeoutError as exc:
-            raise PlannerTimeoutError(
-                f"Planner LLM call exceeded timeout of {timeout_ms}ms"
-            ) from exc
+        ):
+            try:
+                attempt_messages = list(messages)
+                if retry_suffix:
+                    attempt_messages.append(
+                        LLMMessage(role="user", content=retry_suffix)
+                    )
+                response, fragment = await asyncio.wait_for(
+                    self._client.structured_output_with_usage(
+                        attempt_messages,
+                        DAGFragment,
+                        temperature=0.0,
+                        max_tokens=max_tokens,
+                    ),
+                    timeout=timeout_ms / 1000.0,
+                )
+            except asyncio.TimeoutError as exc:
+                raise PlannerTimeoutError(
+                    f"Planner LLM call exceeded timeout of {timeout_ms}ms"
+                ) from exc
+            except Exception as exc:  # ValidationError, JSON parse, etc.
+                last_error = exc
+                logger.warning(
+                    "Planner attempt %d failed: %s. Retrying with shorter prompt.",
+                    attempt + 1,
+                    exc,
+                )
+                continue
+
+            # If the LLM hit the length cap, treat as a soft failure and retry.
+            if response is not None and response.finish_reason == "length":
+                last_error = ValueError(
+                    f"Planner output truncated at {max_tokens} tokens; retrying."
+                )
+                logger.warning(str(last_error))
+                continue
+
+            # If a domain toolkit is registered but the plan doesn't use any
+            # of its tools, treat as a soft failure and retry with a stronger
+            # directive. Reasoning models tend to default to environment
+            # reconnaissance, which is not what we want for a domain goal.
+            if domain_tool_names and not any(
+                n.command in domain_tool_names for n in fragment.nodes
+            ):
+                last_error = ValueError(
+                    f"Plan ignored registered domain toolkit "
+                    f"(expected at least one of: {sorted(domain_tool_names)}); "
+                    f"got: {[n.command for n in fragment.nodes]}"
+                )
+                logger.warning("Planner attempt %d: %s", attempt + 1, last_error)
+                continue
+            break
+        else:
+            # All retries exhausted; surface the last error to the caller.
+            raise last_error  # type: ignore[misc]
+
+        # Stash usage on the fragment so OPALoop can accumulate tokens
+        # without changing the public return type.
+        if response is not None and getattr(response, "usage", None):
+            setattr(fragment, "_usage", dict(response.usage))
+        return fragment
 
     async def plan_full_dag(
         self,
@@ -276,17 +380,40 @@ class Planner:
     # -- private helpers ---------------------------------------------------
 
     def _build_tools_section(self) -> str:
-        """Render available tools as a human-readable section for the prompt."""
-        tools = self.get_available_tools()
-        if not tools:
+        """Render available tools as a human-readable section for the prompt.
+
+        Domain-specific toolkits (any toolkit whose ``name`` is not
+        ``system_data``) are rendered **first** so the model sees them
+        before the generic system tools.  This ordering is meaningful
+        and relied upon by the OPA system-prompt directive.
+        """
+        if not self._toolkits:
             return "(no tools registered)"
+
+        # Order toolkits so domain toolkits come before the generic
+        # system_data toolkit.  Insertion order is otherwise preserved
+        # so callers can control relative ordering among domain toolkits.
+        ordered_toolkits = sorted(
+            self._toolkits,
+            key=lambda tk: 1 if tk.name == "system_data" else 0,
+        )
+
         lines: list[str] = []
-        for t in tools:
-            lines.append(f"- {t['name']}: {t['description']}")
-            schema = t.get("inputSchema", {})
-            props = schema.get("properties", {})
-            for pname, pdef in props.items():
-                lines.append(f"    - {pname} ({pdef.get('type', 'any')}): {pdef.get('description', '')}")
+        for toolkit in ordered_toolkits:
+            toolkit_label = toolkit.name
+            if toolkit_label == "system_data":
+                toolkit_label = "system_data (generic baseline — use only when no domain tool fits)"
+            else:
+                toolkit_label = f"{toolkit_label} (domain-specific — REQUIRED for the user's goal)"
+            lines.append(f"\n[{toolkit_label}]")
+            for t in toolkit.to_mcp_schemas():
+                lines.append(f"- {t['name']}: {t['description']}")
+                schema = t.get("inputSchema", {})
+                props = schema.get("properties", {})
+                for pname, pdef in props.items():
+                    lines.append(
+                        f"    - {pname} ({pdef.get('type', 'any')}): {pdef.get('description', '')}"
+                    )
         return "\n".join(lines)
 
 

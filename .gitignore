@@ -41,3 +41,16 @@ htmlcov/
 # Project-specific
 celeste.db
 .claude/
+.playwright-mcp/
+# Subagent screenshot artifacts
+after-fix*.png
+before-fix*.png
+cmc-*.png
+
+# Local run artifacts
+exports/
+logs/
+*.log
+
+# Phase planning docs (per-branch state files)
+PHASE-*-STATE.md
