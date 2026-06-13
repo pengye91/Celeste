@@ -217,6 +217,11 @@ class Planner:
                     messages,
                     DAGFragment,
                     temperature=0.0,
+                    # Default 4096 is too small for reasoning models that
+                    # burn tokens on internal <think> traces — a 20-node DAG
+                    # fragment easily pushes past 4K tokens. 8K leaves
+                    # comfortable headroom without blowing the budget.
+                    max_tokens=8192,
                 ),
                 timeout=timeout_ms / 1000.0,
             )
