@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Enum, String, Text, ForeignKey, Integer, Index
+from sqlalchemy import JSON, Enum, String, Text, ForeignKey, Integer, Index, UniqueConstraint
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
@@ -338,6 +338,14 @@ class WorkflowEvent(Base):
     __table_args__ = (
         Index("idx_workflow_events_wf_type", "workflow_id", "event_type"),
         Index("idx_workflow_events_correlation", "correlation_id"),
+        # F008: UNIQUE constraint on (workflow_id, sequence_number) so
+        # concurrent emits cannot both insert the same sequence number.
+        # The application code catches IntegrityError and retries with
+        # a fresh sequence number.
+        UniqueConstraint(
+            "workflow_id", "sequence_number",
+            name="uq_workflow_events_wf_seq",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
