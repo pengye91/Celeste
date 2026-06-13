@@ -31,7 +31,7 @@ import GitBranch from "lucide-react/dist/esm/icons/git-branch";
 import Orbit from "lucide-react/dist/esm/icons/orbit";
 import Pause from "lucide-react/dist/esm/icons/pause";
 import Link from "next/link";
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { Suspense, useState, useCallback, useMemo, useEffect } from "react";
 import { NodeInspector } from "@/components/workflow/node-inspector";
 import { WorkflowNav } from "@/components/workflow/workflow-nav";
 import type { NodeInspectorNode } from "@/components/workflow/node-inspector";
@@ -476,6 +476,18 @@ function TimelineStrip({
 }
 
 export default function WorkflowDetailPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  return (
+    <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
+      <WorkflowDetailPageInner params={params} />
+    </Suspense>
+  );
+}
+
+function WorkflowDetailPageInner({
   params,
 }: {
   params: { id: string };
