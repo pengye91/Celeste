@@ -149,18 +149,32 @@ function KpiCard({
 
 function buildCompensationSteps(
   nodes: { name: string; status: string; command?: string; task_type?: string }[],
-  events: { id: string; event_type: string; timestamp: string; event_data: Record<string, unknown> | null }[]
+  events: { id: string; event_type: string; timestamp: string; event_data: Record<string, unknown> | null }[],
+  dagDefinition: { nodes?: { name?: string; compensation_command?: string; command?: string }[] } | null | undefined
 ): CompensationStep[] {
+  // MNT-015: API response (WorkflowNodeStatus) has no `command` field.
+  // Build a lookup from dag_definition.nodes[].compensation_command so
+  // we can match compensation commands even when the node object lacks
+  // the field.
+  const dagNodes = dagDefinition?.nodes ?? [];
+  const commandByName = new Map<string, string>();
+  for (const dagNode of dagNodes) {
+    const cmd = dagNode?.compensation_command ?? dagNode?.command;
+    if (typeof dagNode?.name === "string" && typeof cmd === "string" && cmd.length > 0) {
+      commandByName.set(dagNode.name, cmd);
+    }
+  }
+
   // 1. Select nodes that have a compensation_command
   const compensationNodes = nodes
     .filter((n) => {
       // Check for compensation_command in node data or in dag_definition
-      const cmd = n.command;
+      const cmd = n.command ?? commandByName.get(n.name);
       return cmd && typeof cmd === "string" && cmd.length > 0;
     })
     .map((n) => ({
       ...n,
-      compensationCommand: n.command || "",
+      compensationCommand: n.command ?? commandByName.get(n.name) ?? "",
     }));
 
   if (compensationNodes.length === 0) {
@@ -552,8 +566,12 @@ function SagaCompensationPageInner({
   // Build compensation steps
   const steps = useMemo(() => {
     if (!nodesData || !allEvents) return [];
-    return buildCompensationSteps(nodesData, allEvents);
-  }, [nodesData, allEvents]);
+    return buildCompensationSteps(
+      nodesData,
+      allEvents,
+      workflow?.dag_definition as { nodes?: { name?: string; compensation_command?: string; command?: string }[] } | undefined
+    );
+  }, [nodesData, allEvents, workflow?.dag_definition]);
 
   // Unmatched events
   const unmatchedEvents = useMemo(() => {

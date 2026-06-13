@@ -372,6 +372,49 @@ describe("SagaCompensationPage", () => {
 });
 
 // ------------------------------------------------------------------
+// Lane C: MNT-015 — compensation command sourced from dag_definition
+// ------------------------------------------------------------------
+
+describe("SagaCompensationPage — compensation command from dag_definition (MNT-015)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // MNT-015 regression: WorkflowNodeStatus (the type returned by
+  // useWorkflowNodes) has no `command` field. The original
+  // buildCompensationSteps filtered on `n.command`, so every node
+  // failed the predicate and the steps list was always empty.
+  // The fix sources compensation_command from
+  // workflow.dag_definition.nodes[].compensation_command and merges
+  // it with the API response.
+  it("renders compensation steps when only dag_definition has compensation_command", async () => {
+    setupMocks({
+      // Realistic API shape: nodes have no `command` field
+      workflow: {
+        ...sampleWorkflow,
+        dag_definition: {
+          nodes: [
+            { name: "node-a", compensation_command: "compensate-a" },
+            { name: "node-b", compensation_command: "compensate-b" },
+          ],
+        },
+      },
+      nodes: [
+        { name: "node-a", status: "completed", task_type: "tool" },
+        { name: "node-b", status: "completed", task_type: "tool" },
+      ],
+      events: sampleEvents,
+    });
+
+    await renderPage();
+
+    // Steps should render — previously empty because n.command was undefined.
+    const stepList = screen.queryByRole("list", { name: /compensation steps/i });
+    expect(stepList).not.toBeNull();
+  });
+});
+
+// ------------------------------------------------------------------
 // Lane C: MNT-004 — async params (Next.js 16)
 // ------------------------------------------------------------------
 
