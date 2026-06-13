@@ -119,8 +119,8 @@ async def _poll_run(
     client: httpx.AsyncClient,
     run_id: str,
     *,
-    timeout: float = 120.0,
-    interval: float = 0.2,
+    timeout: float = 900.0,
+    interval: float = 0.5,
 ) -> dict[str, Any]:
     """Poll GET /api/runs/{run_id} until a terminal status is reached.
 
@@ -384,8 +384,8 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=300.0,
-        help="Max seconds to wait for the run to reach a terminal status (with --serve).",
+        default=900.0,
+        help="Max seconds to wait for the run to reach a terminal status.",
     )
     parser.add_argument(
         "--database-url",
