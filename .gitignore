@@ -42,3 +42,8 @@ htmlcov/
 celeste.db
 .claude/
 .playwright-mcp/
+# Subagent screenshot artifacts
+after-fix*.png
+before-fix*.png
+cmc-opa-loop-*.png
+cmc-workflows-*.png
