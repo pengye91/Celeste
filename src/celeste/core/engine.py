@@ -576,7 +576,8 @@ class Engine:
             )
 
         # Execute in workspace
-        output_lines: list[str] = []
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
         failed = False
         failure_data: dict | None = None
 
@@ -586,14 +587,27 @@ class Engine:
         async for event in workspace.execute(node.command, node.arguments):
             await self._event_queue.put(event)
             if event.event_type == "stdout_line":
-                output_lines.append(str(event.data))
+                stdout_lines.append(str(event.data))
+            elif event.event_type == "stderr_line":
+                # OBS-020: capture stderr lines so operators can see
+                # what a node wrote to stderr (DockerWorkspace emits
+                # these events; previously they were dropped).
+                stderr_lines.append(str(event.data))
             elif event.event_type == "execution_failed":
                 failed = True
                 failure_data = (
                     event.data if isinstance(event.data, dict) else {"error": str(event.data)}
                 )
 
-        output_text = "\n".join(output_lines)
+        # OBS-020: persist both streams as structured outputs. The shape is
+        # {"stdout": "...", "stderr": "..."} so operators can recover
+        # what the node printed to either stream.
+        outputs_blob = json.dumps(
+            {
+                "stdout": "\n".join(stdout_lines),
+                "stderr": "\n".join(stderr_lines),
+            }
+        )
 
         if failed:
             async with get_session() as session:
@@ -602,7 +616,7 @@ class Engine:
                 )
                 node = result.scalar_one()
                 node.status = TaskNodeStatus.FAILED
-                node.outputs = output_text
+                node.outputs = outputs_blob
 
                 session.add(
                     TaskEvent(
@@ -624,7 +638,7 @@ class Engine:
                 )
                 node = result.scalar_one()
                 node.status = TaskNodeStatus.COMPLETED
-                node.outputs = output_text
+                node.outputs = outputs_blob
 
                 session.add(
                     TaskEvent(
