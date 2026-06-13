@@ -45,5 +45,12 @@ celeste.db
 # Subagent screenshot artifacts
 after-fix*.png
 before-fix*.png
-cmc-opa-loop-*.png
-cmc-workflows-*.png
+cmc-*.png
+
+# Local run artifacts
+exports/
+logs/
+*.log
+
+# Phase planning docs (per-branch state files)
+PHASE-*-STATE.md
