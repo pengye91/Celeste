@@ -48,6 +48,7 @@ from celeste.database.models import (
     WorkflowEvent,
     WorkflowStatus,
 )
+from celeste.tools.security_auditor import SecurityAuditor, SecurityVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +60,43 @@ class Engine:
         self,
         settings: EngineSettings | None = None,
         workspace_factory: Callable[[], BaseWorkspace] | None = None,
+        security_auditor: SecurityAuditor | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._workspace_factory = workspace_factory or self._default_workspace_factory
+        self._security_auditor = security_auditor
         self._semaphore: asyncio.Semaphore | None = None
         self._running = False
         self._event_queue: asyncio.Queue[WorkspaceEvent] = asyncio.Queue()
         # Track active asyncio tasks for graceful cancellation
         self._active_tasks: set[asyncio.Task] = set()
+
+    def set_security_auditor(self, auditor: SecurityAuditor | None) -> None:
+        """Inject a SecurityAuditor (SEC-002 / SEC-007).
+
+        When set, every node command and every compensation command is
+        audited before it reaches the workspace. ``None`` disables auditing
+        (used by legacy / tests that don't need it).
+        """
+        self._security_auditor = auditor
+
+    def _audit_or_block(self, command: str, context: str = "") -> None:
+        """Run check_deterministic and raise if the verdict is unsafe.
+
+        The Engine path runs synchronously per node, so we use the
+        deterministic regex check (Phase 1). If a full LLM audit is desired,
+        callers can invoke ``self._security_auditor.audit_command`` directly.
+        """
+        if self._security_auditor is None:
+            return
+        verdict: SecurityVerdict | None = self._security_auditor.check_deterministic(
+            command
+        )
+        if verdict is not None and not verdict.is_safe:
+            raise RuntimeError(
+                f"Security audit blocked command ({context}): {verdict.reason} "
+                f"(threats={verdict.detected_threats})"
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -550,6 +580,9 @@ class Engine:
         failed = False
         failure_data: dict | None = None
 
+        # SEC-002: audit before execution
+        self._audit_or_block(node.command or "", context=f"node {node.name}")
+
         async for event in workspace.execute(node.command, node.arguments):
             await self._event_queue.put(event)
             if event.event_type == "stdout_line":
@@ -784,6 +817,8 @@ class Engine:
         # Execute compensation commands in a fresh workspace per node
         for node_id, node_name, comp_cmd, comp_args in completed_with_compensation:
             try:
+                # SEC-007: audit compensation before execution
+                self._audit_or_block(comp_cmd or "", context=f"compensation {node_name}")
                 comp_workspace = self._workspace_factory()
                 await comp_workspace.setup()
                 try:
