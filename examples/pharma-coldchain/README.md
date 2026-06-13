@@ -33,7 +33,7 @@ cd examples/pharma-coldchain
 
 # 3. Configure API keys
 cp .env.example .env
-# Edit .env: set ANTHROPIC_API_KEY=sk-ant-...
+# Edit .env: set LLM_API_KEY=sk-...
 
 # 4. Launch the real infrastructure stack
 docker compose up -d
@@ -56,9 +56,12 @@ open http://localhost:8025
 | `postgres-hub` | 5432 | PostgreSQL tracking shipments, hubs, and batch qualifications |
 | `redis-cache` | 6379 | Redis for IoT telemetry buffer and LLM result cache |
 | `email-gateway` | 1025 (SMTP), 8025 (UI) | Mailhog capturing escalation emails |
-| `iot-telemetry-server` | 8080 | FastAPI WebSocket streaming temperature/humidity from 200+ loggers |
-| `customs-api` | 8090 | FastAPI server with country-specific import rule logic |
-| `celeste-agent` | 8900 | Celeste environment agent (remote mode) |
+
+> **Note:** The previous compose file also defined `iot-telemetry-server`,
+> `customs-api`, and `celeste-agent`. Those services were removed because
+> their commands referenced files/modules that don't exist (PHARMA-1,
+> PHARMA-14, DX-006). Local mode (`run_local.py`) does not need them —
+> it runs everything in-process.
 
 ## Execution Modes
 
@@ -75,19 +78,16 @@ Environment variable overrides:
 
 ```bash
 DATABASE_URL=postgresql+asyncpg://localhost:5432/pharma_coldchain \\
-LLM_PROVIDER=openai LLM_MODEL=gpt-4o OPENAI_API_KEY=sk-... \\
+LLM_PROVIDER=openai LLM_MODEL=gpt-4o LLM_API_KEY=sk-... \\
 python run_local.py
 ```
 
 ### Remote Mode (`run_remote.py` — stub)
 
-Connects to a Celeste agent server via WebSocket. Requires the `celeste-agent`
-service from docker compose to be running.
-
-```bash
-docker compose up celeste-agent -d
-python run_remote.py --agent-url ws://localhost:8900/ws
-```
+> **Disabled.** The `celeste-agent` service was removed from
+> docker-compose.yml (see DX-006 / PHARMA-14). To re-enable this mode,
+> implement `src/celeste/core/agent/serve.py` and the corresponding
+> compose service.
 
 ### Embedded Mode (`run_embedded.py` — stub)
 
@@ -124,27 +124,37 @@ The evaluator checks 8 Celeste features:
 
 ## Directory Structure
 
+The example is split across two sibling directories because Python module
+names cannot contain hyphens:
+
 ```
-pharma-coldchain/
-├── docker-compose.yml       # Real infrastructure services
-├── celeste_config.yml        # Engine configuration
-├── goal.md                   # Natural-language workflow goal
-├── .env.example              # Environment template
-├── README.md                 # This file
-├── run_local.py              # Local mode runner
-├── run_remote.py             # Remote mode stub
-├── run_embedded.py           # Embedded SDK stub
-├── verify.py                 # Evaluation wrapper
-├── seed_data/                # Seed data, schema, fallback tariffs
-└── tools/                    # Custom pharma toolkits
+pharma-coldchain/                    # Runners, config, seed data, docs
+├── docker-compose.yml               # Real infrastructure services
+├── goal.md                          # Natural-language workflow goal
+├── .env.example                     # Environment template (the only config source)
+├── README.md                        # This file
+├── run_local.py                     # Local mode runner
+├── run_remote.py                    # Remote mode stub
+├── run_embedded.py                  # Embedded SDK stub
+├── verify.py                        # Evaluation wrapper
+└── seed_data/                       # Seed data, schema, fallback tariffs
+
+pharma_coldchain/                    # Custom pharma toolkits (Python module)
+└── tools/                           # Importable via examples.pharma_coldchain.tools.*
     ├── cold_chain.py
     ├── customs_bridge.py
-    └── gdp_compliance.py
+    ├── gdp_compliance.py
+    └── pharma_toolkit.py
 ```
 
 ## Cost Estimate
 
-Running the full pharma scenario (all 47 nodes, 23 OPA cycles):
+The pharma scenario is LLM-driven: the planner generates DAG nodes
+dynamically each OPA cycle, so node and cycle counts vary per run and
+depend on the LLM provider. Cost scales roughly linearly with the
+number of OPA cycles until `goal_achieved` (capped by `MAX_OPA_CYCLES`,
+default 100). For budget control, set `MAX_OPA_CYCLES` and `MAX_LLM_TOKENS`
+in `.env`. Approximate order-of-magnitude cost for a typical run:
 
 | Provider | Est. Tokens | Est. Cost |
 |----------|-------------|-----------|

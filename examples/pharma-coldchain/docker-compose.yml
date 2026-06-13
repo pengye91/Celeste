@@ -1,12 +1,27 @@
 # Pharma Cold-Chain: Real Infrastructure Stack
 # =============================================
 #
-# All services run as actual Docker containers. Live LLM calls hit real
-# provider APIs. The only simulated aspect is the scenario seed data.
+# This compose file provisions only the **infrastructure** services that
+# the example actually needs (Postgres, Redis, Mailhog). Domain services
+# that were previously included (iot-telemetry-server, customs-api,
+# celeste-agent) have been removed because they referenced files and
+# modules that do not exist in the repo. See:
+#
+#   - PHARMA-1:  iot-telemetry-server + customs-api tried to run a
+#                `server.py` that was never mounted.
+#   - PHARMA-14: celeste-agent ran `pip install celeste`, which pulls
+#                an unrelated PyPI package and shadows the in-tree
+#                engine.
+#   - DX-006:    celeste-agent invoked `python -m celeste.core.agent.serve`,
+#                a module that does not exist.
+#
+# To re-enable domain services, add a real server.py to seed_data/ and
+# a real `celeste.core.agent.serve` module, then re-enable the entries
+# below.
 #
 # Quick start:
-#   cp .env.example .env          # Edit .env with your API keys
-#   docker compose up -d          # Start all services
+#   cp .env.example .env          # Edit .env with LLM_API_KEY
+#   docker compose up -d          # Start infrastructure services
 #   python run_local.py           # Run the pharma scenario
 
 version: "3.9"
@@ -56,67 +71,17 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------------
-  # Domain Services
+  # Domain Services (DISABLED — see header above)
   # ------------------------------------------------------------------
-
-  iot-telemetry-server:
-    image: python:3.11-alpine
-    container_name: pharma-iot-telemetry
-    working_dir: /app
-    command: >
-      sh -c "pip install fastapi uvicorn websockets && python server.py"
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./seed_data:/app/seed_data:ro
-    environment:
-      PYTHONUNBUFFERED: "1"
-      TELEMETRY_SEED_DIR: /app/seed_data
-    depends_on:
-      postgres-hub:
-        condition: service_healthy
-      redis-cache:
-        condition: service_healthy
-    restart: unless-stopped
-
-  customs-api:
-    image: python:3.11-alpine
-    container_name: pharma-customs-api
-    working_dir: /app
-    command: >
-      sh -c "pip install fastapi uvicorn && python server.py"
-    ports:
-      - "8090:8090"
-    volumes:
-      - ./seed_data:/app/seed_data:ro
-    environment:
-      PYTHONUNBUFFERED: "1"
-      SEED_DIR: /app/seed_data
-    depends_on:
-      postgres-hub:
-        condition: service_healthy
-    restart: unless-stopped
-
-  celeste-agent:
-    image: python:3.11-alpine
-    container_name: pharma-celeste-agent
-    working_dir: /app
-    command: >
-      sh -c "pip install celeste && python -m celeste.core.agent.serve"
-    ports:
-      - "8900:8900"
-    environment:
-      PYTHONUNBUFFERED: "1"
-      DATABASE_URL: "postgresql+asyncpg://celeste:celeste@postgres-hub:5432/pharma_coldchain"
-      REDIS_URL: "redis://redis-cache:6379/0"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-    depends_on:
-      postgres-hub:
-        condition: service_healthy
-      redis-cache:
-        condition: service_healthy
-    restart: unless-stopped
+  #
+  # The following services were removed because their commands referenced
+  # files/modules that don't exist in this repo. Re-enable them after
+  # providing the missing pieces.
+  #
+  #   iot-telemetry-server: needs seed_data/server.py
+  #   customs-api:          needs seed_data/server.py
+  #   celeste-agent:        needs src/celeste/core/agent/serve.py AND
+  #                         a mount of the in-tree src/celeste (PHARMA-14)
 
 volumes:
   postgres_data:

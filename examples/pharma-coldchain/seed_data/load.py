@@ -176,12 +176,20 @@ async def _apply_schema(engine: AsyncEngine, schema_path: Path) -> None:
     # SQLAlchemy's text() can only handle one statement per execute() call.
     statements = [s.strip() for s in sql_text.split(";") if s.strip()]
 
+    # Detect the engine's dialect so we can skip dialect-specific
+    # statements (notably PRAGMA, which is a SQLite extension and not
+    # understood by PostgreSQL/MySQL). PHARMA-15.
+    dialect_name = getattr(getattr(engine, "dialect", None), "name", "") or ""
+    is_sqlite = dialect_name.startswith("sqlite")
+
     async with engine.begin() as conn:
-        # Enable foreign keys for SQLite
-        await conn.execute(text("PRAGMA foreign_keys = ON"))
+        # Enable foreign keys for SQLite. Skipped for non-sqlite dialects
+        # because PRAGMA is not understood by PostgreSQL/MySQL.
+        if is_sqlite:
+            await conn.execute(text("PRAGMA foreign_keys = ON"))
         for stmt in statements:
             if stmt.upper().startswith("PRAGMA"):
-                continue  # PRAGMA handled above
+                continue  # PRAGMA only valid on sqlite; engine path handled it
             await conn.execute(text(stmt))
 
 

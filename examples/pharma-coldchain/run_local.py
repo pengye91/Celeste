@@ -11,12 +11,12 @@ Usage:
 
     # Run with a real PostgreSQL and custom API key:
     DATABASE_URL=postgresql+asyncpg://localhost:5432/pharma_coldchain \\
-    ANTHROPIC_API_KEY=sk-ant-... \\
+    LLM_API_KEY=sk-ant-... \\
     python run_local.py
 
     # Run with OpenAI:
     LLM_PROVIDER=openai LLM_MODEL=gpt-4o \\
-    OPENAI_API_KEY=sk-... \\
+    LLM_API_KEY=sk-... \\
     python run_local.py
 """
 
@@ -380,7 +380,7 @@ def main() -> None:
     parser.add_argument(
         "--api-key",
         default=None,
-        help="LLM API key (default: from ANTHROPIC_API_KEY env var)",
+        help="LLM API key (default: from LLM_API_KEY env var)",
     )
     args = parser.parse_args()
 

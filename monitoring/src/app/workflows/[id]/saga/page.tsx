@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useMemo } from "react";
+import { Suspense, use, useState, useMemo } from "react";
 import Link from "next/link";
 import { Shell } from "@/components/shell/shell";
 import { Panel } from "@/components/ui/panel";
@@ -525,7 +525,7 @@ function EmptyStateIllustration() {
 export default function SagaCompensationPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
   return (
     <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
@@ -537,9 +537,9 @@ export default function SagaCompensationPage({
 function SagaCompensationPageInner({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const id = params.id;
+  const { id } = use(params);
 
   const { data: workflow, isLoading: wfLoading, error: wfError } = useWorkflow(id);
   const { data: nodesData, isLoading: nodesLoading } = useWorkflowNodes(id);

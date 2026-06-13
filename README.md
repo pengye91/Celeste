@@ -1,7 +1,7 @@
 # Celeste-DAG
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-693%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-862%20passing-brightgreen.svg)]()
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **A general-purpose, model-agnostic dynamic agentic workflow engine with durable execution and multi-environment deployment.**
@@ -261,7 +261,7 @@ Celeste/
 │   │   └── schemas.py
 │   └── config/
 │       └── settings.py         # Pydantic-Settings configuration
-├── tests/                      # 693 tests (unit + integration + E2E)
+├── tests/                      # 862 tests (unit + integration + E2E)
 ├── pyproject.toml
 ├── README.md
 ├── DEVELOPMENT.md              # Developer guide & architecture deep-dive
@@ -285,7 +285,7 @@ pytest tests/test_remote_e2e.py -v
 pytest --cov=src/celeste --cov-report=html
 ```
 
-**Current status:** 693 tests passing, 0 failures.
+**Current status:** 862 tests passing, 0 failures.
 
 ---
 

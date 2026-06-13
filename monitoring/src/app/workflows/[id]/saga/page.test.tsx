@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, act } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 
 // Mock the hooks and components
@@ -160,14 +161,33 @@ const sampleEvents = [
   },
 ];
 
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+}
+
+async function renderPage(id = "wf-1") {
+  const queryClient = createQueryClient();
+  let result: ReturnType<typeof render> | undefined;
+  await act(async () => {
+    result = render(
+      <QueryClientProvider client={queryClient}>
+        <SagaCompensationPage params={Promise.resolve({ id })} />
+      </QueryClientProvider>
+    );
+  });
+  return result!;
+}
+
 describe("SagaCompensationPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders loading state with skeletons", () => {
+  it("renders loading state with skeletons", async () => {
     setupMocks({ wfLoading: true, nodesLoading: true, eventsLoading: true });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     // Should show shell
     expect(screen.getByTestId("shell")).toBeInTheDocument();
@@ -175,7 +195,7 @@ describe("SagaCompensationPage", () => {
     expect(document.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
   });
 
-  it("renders empty state when no compensation recorded", () => {
+  it("renders empty state when no compensation recorded", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: [
@@ -184,30 +204,30 @@ describe("SagaCompensationPage", () => {
       ],
       events: [],
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     expect(screen.getByText("No compensation recorded")).toBeInTheDocument();
     expect(screen.getByText(/Compensation steps appear when a node fails/)).toBeInTheDocument();
   });
 
-  it("renders error state", () => {
+  it("renders error state", async () => {
     setupMocks({
       workflow: undefined,
       wfError: new Error("Network failure"),
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     expect(screen.getByText(/Failed to load saga compensation data/)).toBeInTheDocument();
     expect(screen.getByText(/Network failure/)).toBeInTheDocument();
   });
 
-  it("renders summary counts correctly", () => {
+  it("renders summary counts correctly", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     // Triggered = 2 (node-b and node-a have compensation commands and events matched)
     // Actually node-c has empty command so it won't be included
@@ -220,13 +240,13 @@ describe("SagaCompensationPage", () => {
     expect(screen.getByText("Total Steps")).toBeInTheDocument();
   });
 
-  it("renders chain diagram with SVG", () => {
+  it("renders chain diagram with SVG", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    const { container } = render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    const { container } = await renderPage();
 
     const svg = container.querySelector('svg[role="img"]');
     expect(svg).toBeInTheDocument();
@@ -236,26 +256,26 @@ describe("SagaCompensationPage", () => {
     );
   });
 
-  it("matches compensation events to steps by command", () => {
+  it("matches compensation events to steps by command", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     // Steps should show node names — use getAllByText since they may appear multiple times
     expect(screen.getAllByText("node-b").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("node-a").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("shows step status badges with correct variants", () => {
+  it("shows step status badges with correct variants", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     const badges = screen.getAllByTestId("badge");
     // Should have badges for workflow status and step statuses
@@ -266,7 +286,7 @@ describe("SagaCompensationPage", () => {
     expect(stepBadges.length).toBeGreaterThan(0);
   });
 
-  it("renders unmatched events in timeline when events don't match nodes", () => {
+  it("renders unmatched events in timeline when events don't match nodes", async () => {
     const unmatchedEvent = {
       id: "ev-4",
       event_type: "COMPENSATION_TRIGGERED",
@@ -278,28 +298,28 @@ describe("SagaCompensationPage", () => {
       nodes: sampleNodes,
       events: [...sampleEvents, unmatchedEvent],
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     expect(screen.getByText("Unmatched Events")).toBeInTheDocument();
   });
 
-  it("renders workflow not found when workflow is null", () => {
+  it("renders workflow not found when workflow is null", async () => {
     setupMocks({
       workflow: undefined,
       wfLoading: false,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     expect(screen.getByText("Workflow not found")).toBeInTheDocument();
   });
 
-  it("has accessible list items for steps", () => {
+  it("has accessible list items for steps", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     const stepList = screen.getByRole("list", { name: "Compensation steps" });
     expect(stepList).toBeInTheDocument();
@@ -313,40 +333,76 @@ describe("SagaCompensationPage", () => {
     });
   });
 
-  it("shows command snippets for each step", () => {
+  it("shows command snippets for each step", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     expect(screen.getByText("compensate-a")).toBeInTheDocument();
     expect(screen.getByText("compensate-b")).toBeInTheDocument();
   });
 
-  it("shows outcome text for completed and failed steps", () => {
+  it("shows outcome text for completed and failed steps", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    const { container } = render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    const { container } = await renderPage();
 
     // Outcome text may be split across elements; check container textContent
     expect(container.textContent).toContain("Rolled back successfully");
     expect(container.textContent).toContain("Connection timeout");
   });
 
-  it("renders workflow nav with activeTab saga", () => {
+  it("renders workflow nav with activeTab saga", async () => {
     setupMocks({
       workflow: sampleWorkflow,
       nodes: sampleNodes,
       events: sampleEvents,
     });
-    render(<SagaCompensationPage params={{ id: "wf-1" }} />);
+    await renderPage();
 
     const nav = screen.getByTestId("workflow-nav");
     expect(nav).toHaveAttribute("data-active-tab", "saga");
+  });
+});
+
+// ------------------------------------------------------------------
+// Lane C: MNT-004 — async params (Next.js 16)
+// ------------------------------------------------------------------
+
+describe("SagaCompensationPage — async params (Next.js 16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // MNT-004 regression: in Next.js 16, `params` is a Promise. The
+  // page must unwrap it with React.use(params). Without unwrapping,
+  // id is undefined and the breadcrumb's id.slice(0, 8) throws.
+  it("unwraps async params and renders the breadcrumb with the id slice", async () => {
+    // workflow=null so the breadcrumb falls back to id.slice(0, 8).
+    setupMocks({ workflow: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <SagaCompensationPage params={Promise.resolve({ id: "wf-saga-id" })} />
+        </QueryClientProvider>
+      );
+    });
+
+    // Look for the link with the id slice in the href.
+    const breadcrumbLinks = screen.queryAllByRole("link");
+    const idLink = breadcrumbLinks.find(
+      (l) => l.getAttribute("href") === "/workflows/wf-saga-id"
+    );
+    expect(idLink).not.toBeUndefined();
   });
 });
