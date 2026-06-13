@@ -28,21 +28,38 @@ class WorkspaceEvent:
 
 
 async def _stream_subprocess_events(
-    command: str,
-    cwd: str,
+    command: str | None = None,
+    cwd: str | None = None,
     env: dict | None = None,
+    *,
+    argv: list[str] | None = None,
 ) -> AsyncIterator[WorkspaceEvent]:
-    """Run *command* as an async subprocess and yield WorkspaceEvents.
+    """Run a command as an async subprocess and yield WorkspaceEvents.
 
     Shared implementation used by LocalTmpWorkspace and GitWorktreeWorkspace
     (and any future concrete workspace that spawns local processes).
+
+    Security (SEC-001): this function never invokes /bin/sh. Callers must
+    supply either ``argv`` (a structured argv list) or ``command`` (a single
+    argv[0] string). When ``command`` is given, it is executed as ``[command]``
+    with no shell interpretation, so shell metacharacters are NOT evaluated.
     """
+    if argv is None:
+        if command is None:
+            raise ValueError("Either 'command' or 'argv' must be provided")
+        argv = [command]
+    if not argv:
+        raise ValueError("argv must be a non-empty list")
+
+    if cwd is None:
+        raise ValueError("cwd is required")
+
     proc_env = dict(os.environ)
     if env:
         proc_env.update(env)
 
-    proc = await asyncio.create_subprocess_shell(
-        command,
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
