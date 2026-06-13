@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import React from "react";
+import { render, screen, waitFor, act } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import SecurityAuditPage from "./page";
 import * as useWorkflowModule from "@/hooks/useWorkflow";
 import * as useWorkflowEventsModule from "@/hooks/useWorkflowEvents";
@@ -223,71 +225,90 @@ function mockHooks({
 // Tests
 // ------------------------------------------------------------------
 
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+}
+
+async function renderPage(id = "wf-1") {
+  const queryClient = createQueryClient();
+  let result: ReturnType<typeof render> | undefined;
+  await act(async () => {
+    result = render(
+      <QueryClientProvider client={queryClient}>
+        <SecurityAuditPage params={Promise.resolve({ id })} />
+      </QueryClientProvider>
+    );
+  });
+  return result!;
+}
+
 describe("SecurityAuditPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders loading state while data is loading", () => {
+  it("renders loading state while data is loading", async () => {
     mockHooks({ wfLoading: true, eventsLoading: true, metricsLoading: true });
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getByTestId("shell")).toBeInTheDocument();
     // Loading skeletons should be present
     expect(document.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
   });
 
-  it("renders error state when fetch fails", () => {
+  it("renders error state when fetch fails", async () => {
     mockHooks({
       wfError: new Error("Network error"),
       events: [],
     });
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getByText(/Failed to load security audit data/i)).toBeInTheDocument();
   });
 
-  it("renders empty state when no audit events exist", () => {
+  it("renders empty state when no audit events exist", async () => {
     mockHooks({ events: [] });
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getByText(/No audited calls/i)).toBeInTheDocument();
     expect(
       screen.getByText(/Security audits appear when tool calls are evaluated/i)
     ).toBeInTheDocument();
   });
 
-  it("renders workflow header with name, status badge, and copy-id button", () => {
+  it("renders workflow header with name, status badge, and copy-id button", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getAllByText("Test Workflow").length).toBeGreaterThan(0);
     expect(screen.getAllByText("running").length).toBeGreaterThan(0);
     expect(screen.getAllByText("wf-1").length).toBeGreaterThan(0);
   });
 
-  it("renders WorkflowNav with activeTab=security", () => {
+  it("renders WorkflowNav with activeTab=security", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     const nav = screen.getByTestId("workflow-nav");
     expect(nav).toHaveAttribute("data-active-tab", "security");
   });
 
-  it("renders coverage meter with correct percentage from metrics", () => {
+  it("renders coverage meter with correct percentage from metrics", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     // 75% from metrics.security_pass_rate
     expect(screen.getByText("75%")).toBeInTheDocument();
   });
 
-  it("renders coverage meter with computed percentage when metrics lacks pass rate", () => {
+  it("renders coverage meter with computed percentage when metrics lacks pass rate", async () => {
     mockHooks({
       metrics: { ...sampleMetrics, security_pass_rate: null },
     });
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     // 1 safe / 3 total = 33%
     expect(screen.getByText("33%")).toBeInTheDocument();
   });
 
-  it("renders blocked calls list with tool, arguments snippet, risk level, and reason", () => {
+  it("renders blocked calls list with tool, arguments snippet, risk level, and reason", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     // Blocked tools — use getAllByText since tool names also appear in verdict cards
     expect(screen.getAllByText("write_file").length).toBeGreaterThan(0);
     expect(screen.getAllByText("fetch_url").length).toBeGreaterThan(0);
@@ -301,31 +322,31 @@ describe("SecurityAuditPage", () => {
     expect(screen.getAllByText(/etc\/passwd/).length).toBeGreaterThan(0);
   });
 
-  it("renders threat tag cloud with unique threats", () => {
+  it("renders threat tag cloud with unique threats", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getByText("file-system-escape")).toBeInTheDocument();
     expect(screen.getByText("privilege-escalation")).toBeInTheDocument();
     expect(screen.getByText("suspicious-network")).toBeInTheDocument();
   });
 
-  it("renders verdict cards for each audit event", () => {
+  it("renders verdict cards for each audit event", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     // Safe and blocked verdicts
     expect(screen.getByText("Safe")).toBeInTheDocument();
     expect(screen.getAllByText("Blocked").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("shows 'All calls passed' when no blocked audits", () => {
+  it("shows 'All calls passed' when no blocked audits", async () => {
     mockHooks({ events: [safeAuditEvent] });
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getByText(/All calls passed security audit/i)).toBeInTheDocument();
   });
 
-  it("verdict cards are not keyboard-focusable (a11y: no interactive role)", () => {
+  it("verdict cards are not keyboard-focusable (a11y: no interactive role)", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     // Lane 3 a11y pass: removed tabIndex={0} from VerdictCard divs
     // because they have no onClick and no interactive role. The
     // cards remain readable and screen-reader-friendly via the
@@ -342,7 +363,7 @@ describe("SecurityAuditPage", () => {
     );
 
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     const copyButton = screen.getByTitle("Copy ID");
     copyButton.click();
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("wf-1"));
@@ -355,14 +376,14 @@ describe("SecurityAuditPage", () => {
     );
   });
 
-  it("renders aria-live region for summary", () => {
+  it("renders aria-live region for summary", async () => {
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     const liveRegion = screen.getByText(/Blocked calls:/i).closest("[aria-live]");
     expect(liveRegion).toHaveAttribute("aria-live", "polite");
   });
 
-  it("handles unknown verdict gracefully", () => {
+  it("handles unknown verdict gracefully", async () => {
     const unknownEvent: WorkflowEvent = {
       id: "evt-4",
       event_type: "SECURITY_AUDIT",
@@ -375,18 +396,54 @@ describe("SecurityAuditPage", () => {
       timestamp: "2026-06-12T10:08:00Z",
     };
     mockHooks({ events: [unknownEvent] });
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
 
-  it("renders with reduced-motion class when prefers-reduced-motion is set", () => {
+  it("renders with reduced-motion class when prefers-reduced-motion is set", async () => {
     // Note: actual reduced-motion behavior is CSS-based via media query;
     // this test verifies the component renders without animation-dependent assertions.
     mockHooks();
-    render(<SecurityAuditPage params={{ id: "wf-1" }} />);
+    await renderPage();
     // Coverage meter should still render
     expect(screen.getByText("75%")).toBeInTheDocument();
     // Verdict cards should render
     expect(screen.getByText("Safe")).toBeInTheDocument();
+  });
+});
+
+// ------------------------------------------------------------------
+// Lane C: MNT-002 — async params (Next.js 16)
+// ------------------------------------------------------------------
+
+describe("SecurityAuditPage — async params (Next.js 16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // MNT-002 regression: in Next.js 16, `params` is a Promise. The
+  // page must unwrap it with React.use(params). Without unwrapping,
+  // `id = params.id` reads Promise.id (undefined) and the breadcrumb's
+  // `id.slice(0, 8)` throws.
+  it("unwraps async params and renders the breadcrumb with the id slice", async () => {
+    mockHooks({ workflow: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <SecurityAuditPage params={Promise.resolve({ id: "wf-security-id" })} />
+        </QueryClientProvider>
+      );
+    });
+
+    // The breadcrumb renders id.slice(0, 8) when workflow is null.
+    // With the bug, id is undefined and slice throws.
+    const breadcrumbLink = screen.queryByRole("link", {
+      name: /wf-secur$/,
+    });
+    expect(breadcrumbLink).not.toBeNull();
   });
 });
