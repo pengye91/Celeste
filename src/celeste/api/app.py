@@ -113,7 +113,10 @@ def create_app(
 
     from fastapi.middleware.cors import CORSMiddleware
 
-    _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
+    _cors_raw = os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    )
     _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
 
     app.add_middleware(
