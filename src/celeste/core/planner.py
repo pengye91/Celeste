@@ -114,6 +114,14 @@ You are an expert workflow planner operating in an Observe-Plan-Act (OPA) loop.
 Your job is to plan the next batch of tasks given the current goal, environment \
 observation, available tools, and execution history.
 
+Toolkit preference:
+- If a domain-specific toolkit is registered (e.g. pharma_coldchain, \
+financial_audit, custom_tools), prefer its tools over generic system tools for \
+the user's domain.
+- The toolkits listed first in the available tools section are the \
+domain-specific ones; the system_data toolkit is the generic baseline for \
+file/command reconnaissance. Use generic tools only when no domain tool fits.
+
 Each node in the DAG represents a discrete step:
 - **llm_call**: Invoke an LLM with a prompt.
 - **tool_execution**: Run a registered tool.
@@ -276,17 +284,34 @@ class Planner:
     # -- private helpers ---------------------------------------------------
 
     def _build_tools_section(self) -> str:
-        """Render available tools as a human-readable section for the prompt."""
-        tools = self.get_available_tools()
-        if not tools:
+        """Render available tools as a human-readable section for the prompt.
+
+        Domain-specific toolkits (any toolkit whose ``name`` is not
+        ``system_data``) are rendered **first** so the model sees them
+        before the generic system tools.  This ordering is meaningful
+        and relied upon by the OPA system-prompt directive.
+        """
+        if not self._toolkits:
             return "(no tools registered)"
+
+        # Order toolkits so domain toolkits come before the generic
+        # system_data toolkit.  Insertion order is otherwise preserved
+        # so callers can control relative ordering among domain toolkits.
+        ordered_toolkits = sorted(
+            self._toolkits,
+            key=lambda tk: 1 if tk.name == "system_data" else 0,
+        )
+
         lines: list[str] = []
-        for t in tools:
-            lines.append(f"- {t['name']}: {t['description']}")
-            schema = t.get("inputSchema", {})
-            props = schema.get("properties", {})
-            for pname, pdef in props.items():
-                lines.append(f"    - {pname} ({pdef.get('type', 'any')}): {pdef.get('description', '')}")
+        for toolkit in ordered_toolkits:
+            for t in toolkit.to_mcp_schemas():
+                lines.append(f"- {t['name']}: {t['description']}")
+                schema = t.get("inputSchema", {})
+                props = schema.get("properties", {})
+                for pname, pdef in props.items():
+                    lines.append(
+                        f"    - {pname} ({pdef.get('type', 'any')}): {pdef.get('description', '')}"
+                    )
         return "\n".join(lines)
 
 
