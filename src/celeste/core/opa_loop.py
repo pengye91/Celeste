@@ -731,7 +731,10 @@ class OPALoop:
             workflow = result.scalar_one_or_none()
             if workflow is None:
                 raise ValueError(f"Workflow {workflow_id} not found")
-            if workflow.status not in (WorkflowStatus.PAUSED, WorkflowStatus.RUNNING):
+            # F011: align with Engine.resume_workflow. Only PAUSED workflows
+            # can be resumed. RUNNING workflows that have no _opa_state are
+            # orphans from a crash and must NOT be silently re-initialized.
+            if workflow.status != WorkflowStatus.PAUSED:
                 raise ValueError(
                     f"Workflow {workflow_id} is not paused (status={workflow.status.value})"
                 )

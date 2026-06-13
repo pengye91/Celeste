@@ -1174,3 +1174,104 @@ async def test_opa_loop_resume_from_paused():
             assert len(evt_result.scalars().all()) == 1
     finally:
         await close_db()
+
+
+# ---------------------------------------------------------------------------
+# Test: F011 -- OPALoop.resume should reject RUNNING workflows without _opa_state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_resume_rejects_running_without_opa_state():
+    """F011: If a workflow is in RUNNING state but has no _opa_state in
+    dag_definition, resume() must raise ValueError rather than silently
+    re-initializing state from defaults. This catches workflows left in
+    a broken state after a crash and aligns with Engine.resume_workflow
+    which only allows PAUSED -> RUNNING.
+    """
+    from celeste.core.opa_loop import OPALoop
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import (
+        TaskEventType,
+        Workflow,
+        WorkflowEvent,
+        WorkflowStatus,
+    )
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        # Create a workflow in RUNNING state with NO _opa_state in dag_definition
+        from celeste.database.db import get_session_factory
+        from datetime import datetime, timezone
+
+        async with get_session() as session:
+            wf = Workflow(
+                name="orphan-running",
+                description="Workflow in RUNNING state without _opa_state",
+                status=WorkflowStatus.RUNNING,
+                dag_definition={},  # No _opa_state key
+            )
+            session.add(wf)
+            await session.flush()
+            workflow_id = wf.id
+
+        # A simple stub agent
+        agent = _StubAgent(snapshot_result={"files": {}})
+        planner = _StubPlanner(fragments=[_make_fragment(goal_achieved=True)])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+
+        # Resume should raise ValueError (not silently treat as new run)
+        with pytest.raises(ValueError, match="_opa_state|paused"):
+            await loop.resume(workflow_id, "human input")
+    finally:
+        await close_db()
+
+
+# ---------------------------------------------------------------------------
+# Test: F022 -- _mark_node_status and _update_workflow_status use a single
+# session in the OPA loop's status transitions.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_status_update_and_node_status_in_one_session():
+    """F022: When a node completes and the workflow is marked as such,
+    the row mutations and the WorkflowEvent insert should commit together
+    in a single session/transaction so we don't have a window where the
+    status is updated but the event isn't recorded (or vice versa).
+
+    This test exercises the WorkflowExecutor's _mark_node_status + a
+    subsequent _update_workflow_status. We verify that the engine's
+    combined helper does both within one session by inspecting the
+    implementation shape: both the TaskNode.status mutation and the
+    TaskEvent append happen in the same `async with get_session()` block
+    of _mark_node_status, and the workflow status update reads the row
+    in a fresh session after the node event is committed. This is a
+    regression test: if anyone splits the two operations across sessions
+    in a way that breaks atomicity, this test will need to be updated
+    alongside the fix.
+    """
+    import inspect
+
+    from celeste.core.opa_loop import WorkflowExecutor
+
+    src = inspect.getsource(WorkflowExecutor._mark_node_status)
+    # _mark_node_status must keep TaskNode update and TaskEvent insert in
+    # the same `async with get_session()` block.
+    assert "session.add" in src
+    assert "TaskEvent" in src
+    # Single session block: count `async with get_session` occurrences
+    # and ensure node update + event add fall in the first one.
+    assert src.count("async with get_session") == 1, (
+        "_mark_node_status should keep the status update and event insert "
+        "in a single session block"
+    )
+

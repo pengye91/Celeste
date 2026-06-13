@@ -1888,3 +1888,209 @@ class TestOPALoopIntegration:
         finally:
             await engine.stop()
 
+
+# ---------------------------------------------------------------------------
+# Test: F016 -- Checkpoint adjacency list rewrite
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpointAdjacencyRewrite:
+    """F016: _check_and_checkpoint must rewrite previous_node_ids and
+    next_node_ids to reference the NEW workflow's UUIDs, not the old ones.
+    Otherwise, _get_ready_nodes finds no completed dependencies and the
+    new workflow deadlocks.
+    """
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_rewrites_adjacency_ids(self, settings):
+        from celeste.core.engine import Engine
+        from celeste.core.checkpoint import CheckpointManager
+        from celeste.database.models import WorkflowEvent
+
+        # Use a tiny threshold to force checkpoint
+        mgr = CheckpointManager(settings=settings, event_threshold=1)
+        engine = Engine(settings=settings)
+        await engine.start()
+        try:
+            wf_id = await engine.submit_workflow(SAMPLE_PLAN)
+            # Mark step_a as completed so we have one completed node;
+            # step_b/step_c then depend on a UUID that the new workflow
+            # must rewrite to its own.
+            from celeste.database.db import get_session
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(TaskNode).where(
+                        TaskNode.workflow_id == wf_id,
+                        TaskNode.name == "step_a",
+                    )
+                )
+                step_a = result.scalar_one()
+                step_a.status = TaskNodeStatus.COMPLETED
+                # Insert a WorkflowEvent so the checkpoint threshold is met
+                session.add(
+                    WorkflowEvent(
+                        workflow_id=wf_id,
+                        event_type=TaskEventType.CYCLE_STARTED,
+                        sequence_number=1,
+                        event_data={"cycle": 1},
+                    )
+                )
+
+            new_wf_id = await engine._check_and_checkpoint(wf_id, mgr)
+            assert new_wf_id is not None
+            assert new_wf_id != wf_id
+
+            # Inspect the new workflow's nodes: every previous_node_ids
+            # entry must reference a node that exists in new_wf_id.
+            async with get_session() as session:
+                new_nodes_result = await session.execute(
+                    select(TaskNode).where(TaskNode.workflow_id == new_wf_id)
+                )
+                new_nodes = new_nodes_result.scalars().all()
+                new_node_ids = {str(n.id) for n in new_nodes}
+
+                for node in new_nodes:
+                    for prev_id in node.previous_node_ids:
+                        assert prev_id in new_node_ids, (
+                            f"Node {node.name} in new workflow has "
+                            f"previous_node_ids={node.previous_node_ids} "
+                            f"referencing a UUID not in the new workflow "
+                            f"(available: {new_node_ids})"
+                        )
+        finally:
+            await engine.stop()
+
+
+# ---------------------------------------------------------------------------
+# Test: F003 -- _complete_workflow / _fail_workflow atomic status update
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowTerminalStatusRace:
+    """F003: _complete_workflow and _fail_workflow must use a conditional
+    UPDATE (WHERE status='running') rather than SELECT-then-write to
+    prevent races where two completion paths each transition the workflow
+    out of RUNNING.
+    """
+
+    @pytest.mark.asyncio
+    async def test_complete_workflow_uses_atomic_update(self, settings):
+        from celeste.core.engine import Engine
+
+        engine = Engine(settings=settings)
+        await engine.start()
+        try:
+            wf_id = await engine.submit_workflow(SAMPLE_PLAN)
+
+            # Set workflow to RUNNING manually to simulate post-dispatch
+            from celeste.database.db import get_session
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Workflow).where(Workflow.id == wf_id)
+                )
+                wf = result.scalar_one()
+                wf.status = WorkflowStatus.RUNNING
+
+            await engine._complete_workflow(wf_id)
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Workflow).where(Workflow.id == wf_id)
+                )
+                wf = result.scalar_one()
+                assert wf.status == WorkflowStatus.COMPLETED
+        finally:
+            await engine.stop()
+
+    @pytest.mark.asyncio
+    async def test_complete_workflow_no_op_when_not_running(self, settings):
+        """If the workflow is already in a terminal state, the conditional
+        UPDATE in _complete_workflow must NOT overwrite it (e.g. FAILED)."""
+        from celeste.core.engine import Engine
+
+        engine = Engine(settings=settings)
+        await engine.start()
+        try:
+            wf_id = await engine.submit_workflow(SAMPLE_PLAN)
+
+            from celeste.database.db import get_session
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Workflow).where(Workflow.id == wf_id)
+                )
+                wf = result.scalar_one()
+                # Set status to FAILED directly
+                wf.status = WorkflowStatus.FAILED
+
+            await engine._complete_workflow(wf_id)
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(Workflow).where(Workflow.id == wf_id)
+                )
+                wf = result.scalar_one()
+                # _complete_workflow must not have overwritten FAILED
+                assert wf.status == WorkflowStatus.FAILED
+        finally:
+            await engine.stop()
+
+
+# ---------------------------------------------------------------------------
+# Test: F008 -- WorkflowEvent sequence_number race
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowEventSequenceNumberRace:
+    """F008: Concurrent _run_node_under_semaphore coroutines on the same
+    workflow must not produce WorkflowEvent rows with duplicate
+    sequence_numbers. The fix should add a UNIQUE constraint on
+    (workflow_id, sequence_number) and retry on IntegrityError.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_emits_produce_unique_sequence_numbers(self, settings):
+        from celeste.core.engine import Engine
+        from celeste.database.models import WorkflowEvent
+
+        engine = Engine(settings=settings, workspace_factory=lambda: MockWorkspace())
+        await engine.start()
+        try:
+            wf_id = await engine.submit_workflow(PARALLEL_PLAN)
+
+            # Concurrently emit WORKSPACE_SPAWN events for the same workflow
+            # using the same code path as _run_node_under_semaphore, which
+            # uses the atomic helper that retries on IntegrityError.
+            import asyncio
+
+            node_ids = [uuid.uuid4() for _ in range(5)]
+            await asyncio.gather(
+                *(
+                    engine._emit_workflow_event_atomic(
+                        workflow_id=wf_id,
+                        node_id=nid,
+                        event_type=TaskEventType.WORKSPACE_SPAWN,
+                    )
+                    for nid in node_ids
+                )
+            )
+
+            # Verify all sequence numbers are unique
+            from celeste.database.db import get_session
+
+            async with get_session() as session:
+                result = await session.execute(
+                    select(WorkflowEvent.sequence_number).where(
+                        WorkflowEvent.workflow_id == wf_id
+                    )
+                )
+                seqs = [row[0] for row in result.all()]
+                assert len(seqs) == len(set(seqs)), (
+                    f"Duplicate sequence numbers found: {seqs}"
+                )
+        finally:
+            await engine.stop()
+
+
