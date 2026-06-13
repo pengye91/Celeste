@@ -113,9 +113,33 @@ class ExampleRunner:
     # Seed data loading
     # ------------------------------------------------------------------
 
+    def _resolve_load_script_path(self) -> Path:
+        """Return the path to the example's seed_data/load.py, if any.
+
+        The example_dir typically uses a hyphenated name (e.g.
+        ``examples/pharma-coldchain``), but the loader module is
+        importable as ``examples.pharma_coldchain`` (Python forbids
+        hyphens in package names). For that reason the loader sometimes
+        lives one directory up under the underscore variant; check both.
+        """
+        candidates = [
+            self._example_dir / "seed_data" / "load.py",
+            self._example_dir.with_name(
+                self._example_dir.name.replace("-", "_")
+            )
+            / "seed_data"
+            / "load.py",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        # Return the first (canonical) candidate even if missing so callers
+        # can produce a useful log message.
+        return candidates[0]
+
     async def load_seed_data(self, db_url: str | None = None) -> None:
         """Run the example's seed_data/load.py script."""
-        load_script = self._example_dir / "seed_data" / "load.py"
+        load_script = self._resolve_load_script_path()
         if not load_script.exists():
             logger.info("No seed data loader at %s; skipping", load_script)
             return
