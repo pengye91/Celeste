@@ -1,5 +1,6 @@
 "use client";
 
+import { use } from "react";
 import { Shell } from "@/components/shell/shell";
 import { Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
@@ -478,7 +479,7 @@ function TimelineStrip({
 export default function WorkflowDetailPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
   return (
     <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
@@ -490,9 +491,9 @@ export default function WorkflowDetailPage({
 function WorkflowDetailPageInner({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const id = params.id;
+  const { id } = use(params);
   const { data: workflow, isLoading: wfLoading } = useWorkflow(id);
   const { data: status } = useWorkflowStatus(id);
   const { data: metrics } = useWorkflowMetrics(id);
