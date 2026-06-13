@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { Suspense, useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { Shell } from "@/components/shell/shell";
 import { Panel } from "@/components/ui/panel";
 import { Badge } from "@/components/ui/badge";
@@ -498,6 +498,18 @@ function StatusPanel({
 // ------------------------------------------------------------------
 
 export default function EscalationPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  return (
+    <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
+      <EscalationPageInner params={params} />
+    </Suspense>
+  );
+}
+
+function EscalationPageInner({
   params,
 }: {
   params: { id: string };

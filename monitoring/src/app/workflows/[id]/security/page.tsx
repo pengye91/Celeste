@@ -26,7 +26,7 @@ import Fingerprint from "lucide-react/dist/esm/icons/fingerprint-pattern";
 import Siren from "lucide-react/dist/esm/icons/siren";
 import FileJson from "lucide-react/dist/esm/icons/file-json";
 import Link from "next/link";
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 
 // ------------------------------------------------------------------
 // Types
@@ -342,6 +342,18 @@ function VerdictCard({
 // ------------------------------------------------------------------
 
 export default function SecurityAuditPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  return (
+    <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
+      <SecurityAuditPageInner params={params} />
+    </Suspense>
+  );
+}
+
+function SecurityAuditPageInner({
   params,
 }: {
   params: { id: string };
