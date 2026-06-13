@@ -50,6 +50,14 @@ logger = logging.getLogger(__name__)
 
 _SEED_DIR = Path(__file__).resolve().parent / "seed_data"
 
+# Fix C: retry transient seed-load failures. The Postgres healthcheck can
+# report "healthy" a moment before initdb has fully committed the catalog,
+# so a single attempt can race and silently leave the DB unseeded. A small
+# bounded retry loop closes that window while keeping the load best-effort
+# (final failure still logs + continues, never aborting serve).
+_SEED_LOAD_MAX_ATTEMPTS = 3
+_SEED_LOAD_BACKOFF_SECONDS = 0.5
+
 
 async def _load_seed_best_effort(database_url: str | None) -> None:
     """Load pharma seed data best-effort before serving.
@@ -58,6 +66,12 @@ async def _load_seed_best_effort(database_url: str | None) -> None:
     telemetry_log / hubs / batches directly. Without seed data the queries
     fail with ``no such table``. A failure here only logs a warning so a
     seed-load bug doesn't mask a real server bug.
+
+    The load is retried up to :data:`_SEED_LOAD_MAX_ATTEMPTS` times with a
+    short backoff (:data:`_SEED_LOAD_BACKOFF_SECONDS`) so a transient "DB
+    healthy per the probe but still finishing initdb" window doesn't silently
+    leave the DB unseeded. Only the final failure (after all retries) is
+    logged as a warning; the function always returns normally (best-effort).
     """
     if not database_url:
         logger.info(
@@ -65,18 +79,40 @@ async def _load_seed_best_effort(database_url: str | None) -> None:
             "Cold-chain SQL queries may fail until seed data is loaded."
         )
         return
-    try:
-        logger.info(
-            "Loading pharma seed data from %s into %s", _SEED_DIR, database_url
-        )
-        counts = await load_seed_data(database_url, _SEED_DIR)
-        logger.info("Seed data loaded: %s", counts)
-    except Exception as exc:
-        logger.warning(
-            "Pharma seed data load failed; cold_chain SQL queries may fail. "
-            "Server will still start. Cause: %s",
-            exc,
-        )
+
+    last_exc: Exception | None = None
+    for attempt in range(1, _SEED_LOAD_MAX_ATTEMPTS + 1):
+        try:
+            logger.info(
+                "Loading pharma seed data from %s into %s (attempt %d/%d)",
+                _SEED_DIR,
+                database_url,
+                attempt,
+                _SEED_LOAD_MAX_ATTEMPTS,
+            )
+            counts = await load_seed_data(database_url, _SEED_DIR)
+            logger.info("Seed data loaded: %s", counts)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _SEED_LOAD_MAX_ATTEMPTS:
+                logger.info(
+                    "Pharma seed data load attempt %d/%d failed; retrying in "
+                    "%.1fs. Cause: %s",
+                    attempt,
+                    _SEED_LOAD_MAX_ATTEMPTS,
+                    _SEED_LOAD_BACKOFF_SECONDS,
+                    exc,
+                )
+                await asyncio.sleep(_SEED_LOAD_BACKOFF_SECONDS)
+
+    # All attempts exhausted: best-effort — log and continue (do NOT raise).
+    logger.warning(
+        "Pharma seed data load failed after %d attempts; cold_chain SQL "
+        "queries may fail. Server will still start. Cause: %s",
+        _SEED_LOAD_MAX_ATTEMPTS,
+        last_exc,
+    )
 
 
 def main() -> None:

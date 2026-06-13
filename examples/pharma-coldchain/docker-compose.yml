@@ -37,7 +37,12 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./seed_data/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      # NOTE: schema.sql is NOT mounted into docker-entrypoint-initdb.d/.
+      # It begins with `PRAGMA foreign_keys = ON;`, a SQLite extension that
+      # is invalid PostgreSQL and makes initdb error with "syntax error".
+      # serve_agent.py is the real schema source: it creates the tables via
+      # SQLAlchemy (_apply_schema, CREATE TABLE IF NOT EXISTS, skips PRAGMA
+      # for non-sqlite dialects). (Fix B.)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U celeste -d pharma_coldchain"]
       interval: 5s

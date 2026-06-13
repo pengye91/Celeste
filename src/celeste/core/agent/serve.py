@@ -63,17 +63,21 @@ async def serve(
         toolkits=toolkits,
         auth_token=auth_token,
     )
-    await agent.start()
-    logger.info(
-        "Celeste agent server listening on %s:%d (workdir=%s, toolkits=%d)",
-        host,
-        port,
-        workdir,
-        len(toolkits) if toolkits else 0,
-    )
     try:
-        # Run until cancelled. ``suspend_forever`` yields control to the
-        # event loop without busy-waiting; the WebSocketServer handles
+        # NOTE: start() is inside the try block so the finally clause always
+        # runs agent.stop() — even if start() fails (port in use, permission
+        # denied). Otherwise a start() failure would leak the partially-built
+        # server task / bound sockets. (Fix A.)
+        await agent.start()
+        logger.info(
+            "Celeste agent server listening on %s:%d (workdir=%s, toolkits=%d)",
+            host,
+            port,
+            workdir,
+            len(toolkits) if toolkits else 0,
+        )
+        # Run until cancelled. ``asyncio.Event().wait()`` yields control to
+        # the event loop without busy-waiting; the WebSocketServer handles
         # inbound connections concurrently.
         await asyncio.Event().wait()
     except (asyncio.CancelledError, KeyboardInterrupt):

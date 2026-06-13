@@ -357,3 +357,98 @@ async def test_example_runner_run_remote():
     assert result.errors == []
     assert result.workflow_result is not None
     assert result.workflow_result.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# serve_agent._load_seed_best_effort retry loop (Fix C)
+# ---------------------------------------------------------------------------
+# A transient "postgres healthy but still finishing initdb" window used to
+# silently leave the DB unseeded because a single load_seed_data failure was
+# caught and logged with no retry. Fix C adds a small retry loop (a few
+# attempts with short backoff) so transient failures recover, while still
+# being best-effort (logs + continues on final failure).
+
+def _import_serve_agent():
+    """Import examples/pharma-coldchain/serve_agent.py (hyphenated dir)."""
+    _add_example_to_path()
+    import serve_agent
+
+    return serve_agent
+
+
+@pytest.mark.asyncio
+async def test_load_seed_best_effort_retries_transient_failure_then_succeeds(monkeypatch):
+    """A transient load_seed_data failure must be retried until it succeeds.
+
+    Fix C: _load_seed_best_effort wraps load_seed_data in a small retry loop
+    (2-3 attempts with short backoff). If the first 1-2 attempts fail
+    transiently (e.g. the DB is healthy per the probe but still finishing
+    initdb), a later attempt must succeed and the function must NOT raise and
+    NOT log a final-failure warning.
+    """
+    serve_agent = _import_serve_agent()
+
+    attempts: list[int] = []
+
+    async def _flaky_load(db_url, seed_dir, **kwargs):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("transient: relation does not exist yet")
+        return {"hubs": 5, "batches": 10}
+
+    monkeypatch.setattr(serve_agent, "load_seed_data", _flaky_load)
+    # Shorten backoff so the test is fast: patch asyncio.sleep used inside.
+    import asyncio as _asyncio
+
+    real_sleep = _asyncio.sleep
+
+    async def _fast_sleep(delay):
+        # Collapse any backoff delay to near-zero for the test.
+        return await real_sleep(0)
+
+    monkeypatch.setattr(serve_agent.asyncio, "sleep", _fast_sleep)
+
+    # Should NOT raise: the third attempt succeeds.
+    await serve_agent._load_seed_best_effort("postgresql+asyncpg://x/y")
+
+    assert len(attempts) == 3, (
+        f"_load_seed_best_effort should retry until success; got "
+        f"{len(attempts)} attempts (expected 3: 2 transient failures + 1 success)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_seed_best_effort_final_failure_is_best_effort(monkeypatch):
+    """If ALL attempts fail, _load_seed_best_effort must log + continue (not raise).
+
+    Fix C keeps the best-effort contract: after exhausting retries it logs a
+    warning and returns normally so a seed-load bug never masks a real bug
+    or aborts serving.
+    """
+    serve_agent = _import_serve_agent()
+
+    attempts: list[int] = []
+
+    async def _always_fails(db_url, seed_dir, **kwargs):
+        attempts.append(1)
+        raise RuntimeError("persistent failure")
+
+    monkeypatch.setattr(serve_agent, "load_seed_data", _always_fails)
+    import asyncio as _asyncio
+
+    real_sleep = _asyncio.sleep
+
+    async def _fast_sleep(delay):
+        return await real_sleep(0)
+
+    monkeypatch.setattr(serve_agent.asyncio, "sleep", _fast_sleep)
+
+    # Should NOT raise: best-effort logs and continues.
+    await serve_agent._load_seed_best_effort("postgresql+asyncpg://x/y")
+
+    # It must have retried at least twice (i.e. the loop exists), not given up
+    # after a single attempt.
+    assert len(attempts) >= 2, (
+        f"_load_seed_best_effort should retry on failure; got {len(attempts)} "
+        "attempt(s) — expected at least 2 (retry loop missing)"
+    )

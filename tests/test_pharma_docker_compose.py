@@ -118,3 +118,38 @@ def test_pharma_compose_celeste_agent_does_not_invoke_missing_module() -> None:
         f"which is not a real module (DX-006): {bad_services}. Either "
         "create the module or remove the service."
     )
+
+
+def test_pharma_compose_postgres_has_no_initdb_schema_mount() -> None:
+    """The postgres-hub service must NOT mount schema.sql into initdb.
+
+    Fix B (load-bearing for ``docker compose up``): the schema.sql file
+    starts with ``PRAGMA foreign_keys = ON;`` which is a SQLite extension
+    and is invalid PostgreSQL. Mounting it as a
+    ``docker-entrypoint-initdb.d/*.sql`` file makes postgres initdb error
+    with ``syntax error`` and the container fails to initialise.
+
+    serve_agent.py already creates the schema itself via SQLAlchemy
+    (``_apply_schema`` uses ``CREATE TABLE IF NOT EXISTS`` and skips PRAGMA
+    for non-sqlite dialects), so the initdb mount is both redundant AND
+    broken. The schema source of truth is serve_agent.py, not initdb.
+    """
+    with open(PHARMA_COMPOSE) as f:
+        data = yaml.safe_load(f)
+    services = data.get("services", {})
+
+    bad_volumes: list[str] = []
+    for name, cfg in services.items():
+        volumes = cfg.get("volumes", []) or []
+        for vol in volumes:
+            if not isinstance(vol, str):
+                continue
+            if "docker-entrypoint-initdb.d" in vol and "schema.sql" in vol:
+                bad_volumes.append(f"{name}: {vol}")
+
+    assert not bad_volumes, (
+        "postgres-hub must not mount schema.sql into "
+        "docker-entrypoint-initdb.d/ — schema.sql begins with PRAGMA which is "
+        "invalid PostgreSQL and breaks initdb (Fix B). serve_agent.py is the "
+        f"real schema source. Offending mounts: {bad_volumes}"
+    )

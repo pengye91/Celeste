@@ -1,6 +1,7 @@
 """End-to-end tests for Celeste-DAG remote agent via WebSocket."""
 
 import asyncio
+import socket
 
 import pytest
 
@@ -334,3 +335,96 @@ async def test_serve_module_serve_coroutine_runs_and_cancels():
     except asyncio.CancelledError:
         pass
     assert task.done()
+
+
+# ---------------------------------------------------------------------------
+# serve() start() failure cleanup (Fix A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_serve_cleans_up_when_start_fails_bound_port():
+    """serve() must call agent.stop() even when agent.start() raises.
+
+    Regression guard (Fix A): ``await agent.start()`` used to live OUTSIDE the
+    try/finally in serve(), so a start() failure (e.g. port already in use,
+    permission denied) left the partially-built agent's resources / server
+    task un-cleaned. After the fix, start() is inside the try block, so the
+    finally clause always runs ``agent.stop()``.
+
+    We occupy a real port with a blocking socket so websockets.serve() raises
+    OSError on bind, then assert:
+      1. serve() re-raises the start failure (does not swallow it).
+      2. cleanup ran: the agent's stop() was invoked (spied), and the agent
+         reports it is not running.
+      3. no other exception leaks beyond the start failure.
+    """
+    pytest.importorskip("websockets")
+    from celeste.core.agent import agent as agent_mod
+    from celeste.core.agent.serve import serve
+
+    # Occupy a port so the agent's start() cannot bind it.
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    occupied_port = blocker.getsockname()[1]
+
+    # Spy on EnvironmentAgent.stop to prove the finally clause runs it.
+    stop_calls: list[bool] = []
+    real_stop = agent_mod.EnvironmentAgent.stop
+
+    async def _spying_stop(self):
+        stop_calls.append(True)
+        return await real_stop(self)
+
+    # Spy on start to also confirm it actually raised (sanity).
+    start_calls: list[bool] = []
+    real_start = agent_mod.EnvironmentAgent.start
+
+    async def _spying_start(self):
+        start_calls.append(True)
+        return await real_start(self)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(agent_mod.EnvironmentAgent, "stop", _spying_stop)
+    monkeypatch.setattr(agent_mod.EnvironmentAgent, "start", _spying_start)
+
+    raised_exc: BaseException | None = None
+    try:
+        await serve(
+            host="127.0.0.1",
+            port=occupied_port,
+            workdir=".",
+            toolkits=None,
+        )
+    except OSError as exc:
+        raised_exc = exc
+    finally:
+        monkeypatch.undo()
+        blocker.close()
+
+    # 1. The start failure propagated (not swallowed).
+    assert raised_exc is not None, (
+        "serve() should have raised OSError on the bound port"
+    )
+    assert isinstance(raised_exc, OSError)
+    assert start_calls, "agent.start() must have been attempted"
+
+    # 2. Cleanup ran: stop() was called by the finally clause.
+    assert stop_calls, (
+        "serve() must call agent.stop() on start() failure (Fix A: start() "
+        "must be inside the try/finally so cleanup always runs)"
+    )
+
+    # 3. No lingering serve task: there is no background asyncio task left
+    #    running serve() (it returned/raised, so it is not still blocking).
+    current = asyncio.current_task()
+    for t in asyncio.all_tasks():
+        if t is current:
+            continue
+        # serve() should NOT be among the running tasks; only pytest infra may be.
+        coro_name = getattr(t.get_coro(), "__name__", "") if t.get_coro() else ""
+        assert coro_name != "serve", (
+            "serve() task is still running after start() failure — resources leaked"
+        )
