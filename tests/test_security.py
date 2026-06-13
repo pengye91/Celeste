@@ -388,21 +388,24 @@ class TestSecurityAuditorLLM:
         assert isinstance(result, SecurityVerdict)
 
     @pytest.mark.asyncio()
-    async def test_llm_failure_returns_safe_verdict(self) -> None:
-        """C1: If LLM raises, audit_command must fail-safe with is_safe=False."""
-        from celeste.tools.security_auditor import SecurityAuditor
+    async def test_llm_failure_raises_audit_unavailable(self) -> None:
+        """OBS-011: If LLM raises, audit_command must raise AuditUnavailable.
+
+        This lets callers distinguish a real security block from an LLM outage
+        and apply their own fail-open vs fail-closed policy.
+        """
+        from celeste.tools.security_auditor import AuditUnavailable, SecurityAuditor
 
         client = DummyLLMClient()
         # Make structured_output raise an exception
         client._complete_mock.side_effect = RuntimeError("LLM provider unavailable")
 
         auditor = SecurityAuditor(client)
-        result = await auditor.audit_command("ls -la /home/user")
+        with pytest.raises(AuditUnavailable) as exc_info:
+            await auditor.audit_command("ls -la /home/user")
 
-        assert result.is_safe is False
-        assert result.risk_level == "high"
-        assert "Security audit failed" in result.reason
-        assert "audit_failure" in result.detected_threats
+        assert "LLM provider unavailable" in str(exc_info.value)
+        assert isinstance(exc_info.value.original, RuntimeError)
 
 
 # ===========================================================================

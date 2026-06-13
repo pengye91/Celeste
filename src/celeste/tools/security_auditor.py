@@ -25,6 +25,21 @@ class SecurityVerdict(BaseModel):
     detected_threats: list[str] = []
 
 
+class AuditUnavailable(Exception):
+    """Raised when the LLM-based Phase 2 audit cannot run (OBS-011).
+
+    This is structurally distinct from a true SecurityVerdict(is_safe=False).
+    Callers can catch this and decide whether to fail-open (allow with a
+    warning) or fail-closed (block). The wrapping ``reason`` field carries
+    the original exception text for diagnostics.
+    """
+
+    def __init__(self, reason: str, original: Exception | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.original = original
+
+
 # ---------------------------------------------------------------------------
 # Blocked pattern definitions
 # ---------------------------------------------------------------------------
@@ -244,9 +259,8 @@ class SecurityAuditor:
             )
             return cast(SecurityVerdict, result)
         except Exception as e:
-            return SecurityVerdict(
-                is_safe=False,
-                risk_level="high",
-                reason=f"Security audit failed: {str(e)}",
-                detected_threats=["audit_failure"],
-            )
+            # OBS-011: raise AuditUnavailable instead of returning a verdict
+            # that is structurally identical to a true security block. This
+            # lets callers distinguish an LLM outage from a real block and
+            # apply their own fail-open vs fail-closed policy.
+            raise AuditUnavailable(reason=str(e), original=e) from e
