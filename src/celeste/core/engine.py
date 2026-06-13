@@ -195,6 +195,22 @@ class Engine:
                 flag_modified(db_node, "next_node_ids")
                 db_node.next_node_ids = new_next
 
+            # OBS-005: emit WORKFLOW_SUBMITTED TaskEvent so the audit trail
+            # has a canonical "workflow started" marker. task_node_id is
+            # required (NOT NULL FK), so we attach to the first node.
+            first_node_id = all_nodes[0].id if all_nodes else wf_id
+            session.add(
+                TaskEvent(
+                    task_node_id=first_node_id,
+                    workflow_id=wf_id,
+                    event_type=TaskEventType.WORKFLOW_SUBMITTED,
+                    event_data={
+                        "name": plan.name,
+                        "node_count": len(all_nodes),
+                    },
+                )
+            )
+
         logger.info("Submitted workflow %s (%s) with %d nodes", wf_id, plan.name, len(plan.nodes))
         return wf_id
 
@@ -409,23 +425,11 @@ class Engine:
             raise RuntimeError("Engine semaphore not initialized; call start() first")
         async with self._semaphore:
             # Emit WORKSPACE_SPAWN before workspace setup
-            async with get_session() as session:
-                seq_result = await session.execute(
-                    select(WorkflowEvent)
-                    .where(WorkflowEvent.workflow_id == workflow_id)
-                    .order_by(WorkflowEvent.sequence_number.desc())
-                    .limit(1)
-                )
-                last_event = seq_result.scalar_one_or_none()
-                next_seq = (last_event.sequence_number + 1) if last_event else 1
-                session.add(
-                    WorkflowEvent(
-                        workflow_id=workflow_id,
-                        task_node_id=node_id,
-                        event_type=TaskEventType.WORKSPACE_SPAWN,
-                        sequence_number=next_seq,
-                    )
-                )
+            await self._emit_workflow_event_atomic(
+                workflow_id=workflow_id,
+                node_id=node_id,
+                event_type=TaskEventType.WORKSPACE_SPAWN,
+            )
 
             try:
                 workspace = self._workspace_factory()
@@ -433,6 +437,31 @@ class Engine:
                     await self._execute_node(node_id, workspace)
             finally:
                 # Emit WORKSPACE_DESTROY after workspace teardown
+                await self._emit_workflow_event_atomic(
+                    workflow_id=workflow_id,
+                    node_id=node_id,
+                    event_type=TaskEventType.WORKSPACE_DESTROY,
+                )
+
+    async def _emit_workflow_event_atomic(
+        self,
+        workflow_id: uuid.UUID,
+        event_type: TaskEventType,
+        node_id: uuid.UUID | None = None,
+        event_data: dict | None = None,
+        max_retries: int = 8,
+    ) -> int:
+        """Atomically allocate the next sequence_number and insert a
+        WorkflowEvent row.
+
+        F008: catches IntegrityError caused by a concurrent insert
+        stealing the same sequence number and retries with a fresh
+        allocation. Returns the sequence_number used.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        for attempt in range(max_retries):
+            try:
                 async with get_session() as session:
                     seq_result = await session.execute(
                         select(WorkflowEvent)
@@ -446,10 +475,42 @@ class Engine:
                         WorkflowEvent(
                             workflow_id=workflow_id,
                             task_node_id=node_id,
-                            event_type=TaskEventType.WORKSPACE_DESTROY,
+                            event_type=event_type,
                             sequence_number=next_seq,
+                            event_data=event_data,
                         )
                     )
+                return next_seq
+            except IntegrityError:
+                # Another coroutine stole this sequence number. Retry.
+                logger.debug(
+                    "F008: sequence_number collision on workflow %s; retry %d",
+                    workflow_id, attempt + 1,
+                )
+                continue
+        # Exhausted retries -- fall back to a high-entropy offset
+        # based on a uuid4 to guarantee uniqueness.
+        async with get_session() as session:
+            last_event = (
+                await session.execute(
+                    select(WorkflowEvent)
+                    .where(WorkflowEvent.workflow_id == workflow_id)
+                    .order_by(WorkflowEvent.sequence_number.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            base = (last_event.sequence_number + 1) if last_event else 1
+            fallback_seq = base + int(uuid.uuid4().int % 1_000_000)
+            session.add(
+                WorkflowEvent(
+                    workflow_id=workflow_id,
+                    task_node_id=node_id,
+                    event_type=event_type,
+                    sequence_number=fallback_seq,
+                    event_data=event_data,
+                )
+            )
+            return fallback_seq
 
     # ------------------------------------------------------------------
     # Node execution
@@ -782,21 +843,91 @@ class Engine:
     # ------------------------------------------------------------------
 
     async def _complete_workflow(self, workflow_id: uuid.UUID) -> None:
+        # F003: atomic conditional update. Only transition to COMPLETED
+        # if the workflow is still in RUNNING. Prevents races where two
+        # completion paths each read the row, set it to terminal, and
+        # one overwrites the other (or a CONCURRENT CANCELLED write wins).
+        from sqlalchemy import update as _update
+
         async with get_session() as session:
-            result = await session.execute(
-                select(Workflow).where(Workflow.id == workflow_id)
+            stmt = (
+                _update(Workflow)
+                .where(
+                    Workflow.id == workflow_id,
+                    Workflow.status == WorkflowStatus.RUNNING,
+                )
+                .values(status=WorkflowStatus.COMPLETED)
             )
-            workflow = result.scalar_one()
-            workflow.status = WorkflowStatus.COMPLETED
+            res = await session.execute(stmt)
+            if res.rowcount == 0:
+                # Workflow already in a terminal state; skip transition.
+                logger.info(
+                    "Workflow %s already in terminal state; skipping COMPLETED",
+                    workflow_id,
+                )
+            else:
+                # OBS-005: emit WORKFLOW_COMPLETED TaskEvent so the audit
+                # trail has a canonical "workflow terminated successfully"
+                # marker. We attach to the first task node to satisfy the
+                # NOT NULL FK on TaskEvent.task_node_id; downstream consumers
+                # should filter on workflow_id.
+                first_node_id = (
+                    await session.execute(
+                        select(TaskNode.id)
+                        .where(TaskNode.workflow_id == workflow_id)
+                        .order_by(TaskNode.created_at.asc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none() or workflow_id
+                session.add(
+                    TaskEvent(
+                        task_node_id=first_node_id,
+                        workflow_id=workflow_id,
+                        event_type=TaskEventType.WORKFLOW_COMPLETED,
+                        event_data={"status": "completed"},
+                    )
+                )
         logger.info("Workflow %s completed successfully", workflow_id)
 
     async def _fail_workflow(self, workflow_id: uuid.UUID) -> None:
+        # F003: atomic conditional update. Only transition to FAILED
+        # if the workflow is still in RUNNING.
+        from sqlalchemy import update as _update
+
         async with get_session() as session:
-            result = await session.execute(
-                select(Workflow).where(Workflow.id == workflow_id)
+            stmt = (
+                _update(Workflow)
+                .where(
+                    Workflow.id == workflow_id,
+                    Workflow.status == WorkflowStatus.RUNNING,
+                )
+                .values(status=WorkflowStatus.FAILED)
             )
-            workflow = result.scalar_one()
-            workflow.status = WorkflowStatus.FAILED
+            res = await session.execute(stmt)
+            if res.rowcount == 0:
+                logger.info(
+                    "Workflow %s already in terminal state; skipping FAILED",
+                    workflow_id,
+                )
+            else:
+                # OBS-005: emit WORKFLOW_FAILED TaskEvent so the audit trail
+                # has a canonical "workflow terminated unsuccessfully" marker.
+                first_node_id = (
+                    await session.execute(
+                        select(TaskNode.id)
+                        .where(TaskNode.workflow_id == workflow_id)
+                        .order_by(TaskNode.created_at.asc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none() or workflow_id
+                session.add(
+                    TaskEvent(
+                        task_node_id=first_node_id,
+                        workflow_id=workflow_id,
+                        event_type=TaskEventType.WORKFLOW_FAILED,
+                        event_data={"status": "failed"},
+                    )
+                )
         logger.info("Workflow %s marked as failed", workflow_id)
 
     # ------------------------------------------------------------------
@@ -881,21 +1012,40 @@ class Engine:
             )
             session.add(new_workflow)
 
-            # Copy task nodes to new workflow
+            # Copy task nodes to new workflow, rewriting adjacency IDs.
+            # F016: new TaskNode rows get fresh UUIDs, so previous_node_ids
+            # and next_node_ids copied verbatim from the old workflow point
+            # to UUIDs that no longer exist in the new workflow, causing
+            # _get_ready_nodes to deadlock. Build old_id -> new_id map and
+            # translate both adjacency lists.
             node_result = await session.execute(
                 select(TaskNode).where(TaskNode.workflow_id == workflow_id)
             )
             old_nodes = node_result.scalars().all()
+            id_map: dict[str, str] = {
+                str(old_node.id): str(uuid.uuid4()) for old_node in old_nodes
+            }
             for old_node in old_nodes:
+                new_prev = [
+                    id_map[p]
+                    for p in (old_node.previous_node_ids or [])
+                    if p in id_map
+                ]
+                new_next = [
+                    id_map[n]
+                    for n in (old_node.next_node_ids or [])
+                    if n in id_map
+                ]
                 new_node = TaskNode(
+                    id=uuid.UUID(id_map[str(old_node.id)]),
                     workflow_id=new_wf_id,
                     name=old_node.name,
                     task_type=old_node.task_type,
                     status=TaskNodeStatus.PENDING,
                     command=old_node.command,
                     arguments=dict(old_node.arguments or {}),
-                    previous_node_ids=list(old_node.previous_node_ids or []),
-                    next_node_ids=list(old_node.next_node_ids or []),
+                    previous_node_ids=new_prev,
+                    next_node_ids=new_next,
                     compensation_command=old_node.compensation_command,
                     compensation_arguments=old_node.compensation_arguments,
                     max_retries=old_node.max_retries,
