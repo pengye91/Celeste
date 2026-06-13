@@ -427,8 +427,8 @@ describe("SagaCompensationPage — async params (Next.js 16)", () => {
   // page must unwrap it with React.use(params). Without unwrapping,
   // id is undefined and the breadcrumb's id.slice(0, 8) throws.
   it("unwraps async params and renders the breadcrumb with the id slice", async () => {
-    // workflow=null so the breadcrumb falls back to id.slice(0, 8).
-    setupMocks({ workflow: null });
+    // workflow=undefined so the breadcrumb falls back to id.slice(0, 8).
+    setupMocks({ workflow: undefined });
 
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
