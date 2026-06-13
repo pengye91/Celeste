@@ -28,7 +28,7 @@ import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Minus from "lucide-react/dist/esm/icons/minus";
 import Link from "next/link";
-import { Suspense, useState, useMemo, useEffect, useRef } from "react";
+import { Suspense, use, useState, useMemo, useEffect, useRef } from "react";
 import { CycleChart } from "@/components/charts/cycle-chart";
 import type { CycleData } from "@/components/charts/cycle-chart";
 
@@ -360,10 +360,18 @@ function KpiCard({
 export default function OPALoopPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
   return (
-    <Suspense fallback={<Shell><div className="space-y-4"><div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" /></div></Shell>}>
+    <Suspense
+      fallback={
+        <Shell>
+          <div className="space-y-4">
+            <div className="h-8 w-64 bg-space-700/50 rounded animate-pulse" />
+          </div>
+        </Shell>
+      }
+    >
       <OPALoopPageInner params={params} />
     </Suspense>
   );
@@ -372,9 +380,9 @@ export default function OPALoopPage({
 function OPALoopPageInner({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const id = params.id;
+  const { id } = use(params);
   const { data: workflow, isLoading: wfLoading, error: wfError } = useWorkflow(id);
   const { data: metrics } = useWorkflowMetrics(id);
   const { data: allEvents, isLoading: eventsLoading, error: eventsError } = useWorkflowEvents(id, {
