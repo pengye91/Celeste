@@ -15,6 +15,8 @@ Integration with Engine:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid
 from typing import Any
@@ -138,10 +140,20 @@ class CheckpointManager:
         workflow_id: uuid.UUID,
         checkpoint_state: dict[str, Any],
     ) -> None:
-        """Create a new WorkflowEvent with type CHECKPOINT.
+        """Create new WorkflowEvents with types CHECKPOINT and STATE_CHECKPOINT.
+
+        OBS-006: FeatureDetector.detect_checkpoint queries for both event
+        types. The CHECKPOINT event stores the snapshot state in event_data;
+        the STATE_CHECKPOINT event stores a deterministic state_hash so
+        detect_checkpoint can compute hash_match across multiple checkpoints.
 
         Stores the checkpoint_state in the event_data field.
         """
+        # Compute deterministic hash of the checkpoint state so the
+        # detector can compare hashes across multiple STATE_CHECKPOINT
+        # rows for the same workflow.
+        state_hash = self._compute_state_hash(checkpoint_state)
+
         async with get_session() as session:
             # Get next sequence number
             result = await session.execute(
@@ -156,15 +168,44 @@ class CheckpointManager:
                     workflow_id=workflow_id,
                     event_type=TaskEventType.CHECKPOINT,
                     sequence_number=seq,
-                    event_data=checkpoint_state,
+                    event_data={**checkpoint_state, "state_hash": state_hash},
+                )
+            )
+
+            # OBS-006: emit STATE_CHECKPOINT as a sibling event so the
+            # detector's `recoveries = [e for e in events if e.event_type ==
+            # TaskEventType.STATE_CHECKPOINT]` query yields non-empty results.
+            session.add(
+                WorkflowEvent(
+                    workflow_id=workflow_id,
+                    event_type=TaskEventType.STATE_CHECKPOINT,
+                    sequence_number=seq + 1,
+                    event_data={
+                        "state_hash": state_hash,
+                        "completed_node_count": len(
+                            checkpoint_state.get("completed_node_ids", [])
+                        ),
+                        "failed_node_count": len(
+                            checkpoint_state.get("failed_node_ids", [])
+                        ),
+                        "cycle_count": checkpoint_state.get("cycle_count", 0),
+                    },
                 )
             )
 
         logger.info(
-            "Recorded CHECKPOINT event for workflow %s (seq=%d)",
+            "Recorded CHECKPOINT + STATE_CHECKPOINT events for workflow %s (seq=%d)",
             workflow_id,
             seq,
         )
+
+    @staticmethod
+    def _compute_state_hash(checkpoint_state: dict[str, Any]) -> str:
+        """Deterministic SHA-256 over a sorted JSON serialization of the state."""
+        # sort_keys ensures identical dicts hash to the same digest
+        # regardless of key order in the source.
+        canonical = json.dumps(checkpoint_state, sort_keys=True, default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     async def resume_from_checkpoint(
         self,
