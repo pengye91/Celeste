@@ -72,10 +72,12 @@ _EXPECTED_COLUMNS: dict[str, list[str]] = {
     "telemetry_log": ["id", "batch_id", "temperature_c", "humidity_pct", "recorded_at"],
 }
 
-# Map table names to their CSV file paths relative to seed_dir
+# Map table names to their CSV file paths relative to seed_dir.
+# Order matters: tables must be loaded after their referenced parents
+# (e.g. batches references hubs.id, so hubs loads first).
 _TABLE_CSV_MAP: dict[str, tuple[str, ...]] = {
-    "batches": ("manifests", "batches.csv"),
     "hubs": ("hubs", "hubs.csv"),
+    "batches": ("manifests", "batches.csv"),
 }
 
 
