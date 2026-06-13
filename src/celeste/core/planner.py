@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from celeste.core.exceptions import PlannerTimeoutError
+logger = logging.getLogger(__name__)
 from celeste.core.llm.base import BaseLLMClient, LLMMessage
 from celeste.toolkits.base import BaseToolkit
 
@@ -219,24 +221,62 @@ class Planner:
 
         messages.append(LLMMessage(role="user", content="\n\n".join(parts)))
 
-        try:
-            response, fragment = await asyncio.wait_for(
-                self._client.structured_output_with_usage(
-                    messages,
-                    DAGFragment,
-                    temperature=0.0,
-                    # Default 4096 is too small for reasoning models that
-                    # burn tokens on internal <think> traces — a 20-node DAG
-                    # fragment easily pushes past 4K tokens. 8K leaves
-                    # comfortable headroom without blowing the budget.
-                    max_tokens=8192,
+        last_error: Exception | None = None
+        # Reasoning models (e.g. MiniMax-M3, DeepSeek-R1) often burn a large
+        # fraction of their output budget on <think> traces, then truncate
+        # the actual JSON. We retry once with a smaller, more directive
+        # prompt if the first response is truncated or fails to parse.
+        for attempt, (max_tokens, retry_suffix) in enumerate(
+            (
+                (8192, ""),
+                (
+                    12288,
+                    "\n\nIMPORTANT: Your previous output was truncated mid-JSON. "
+                    "Respond with FEWER nodes (3-4) and minimal arguments so the "
+                    "JSON fits in the budget. Output only the JSON object, no "
+                    "narrative.",
                 ),
-                timeout=timeout_ms / 1000.0,
             )
-        except asyncio.TimeoutError as exc:
-            raise PlannerTimeoutError(
-                f"Planner LLM call exceeded timeout of {timeout_ms}ms"
-            ) from exc
+        ):
+            try:
+                attempt_messages = list(messages)
+                if retry_suffix:
+                    attempt_messages.append(
+                        LLMMessage(role="user", content=retry_suffix)
+                    )
+                response, fragment = await asyncio.wait_for(
+                    self._client.structured_output_with_usage(
+                        attempt_messages,
+                        DAGFragment,
+                        temperature=0.0,
+                        max_tokens=max_tokens,
+                    ),
+                    timeout=timeout_ms / 1000.0,
+                )
+            except asyncio.TimeoutError as exc:
+                raise PlannerTimeoutError(
+                    f"Planner LLM call exceeded timeout of {timeout_ms}ms"
+                ) from exc
+            except Exception as exc:  # ValidationError, JSON parse, etc.
+                last_error = exc
+                logger.warning(
+                    "Planner attempt %d failed: %s. Retrying with shorter prompt.",
+                    attempt + 1,
+                    exc,
+                )
+                continue
+
+            # If the LLM hit the length cap, treat as a soft failure and retry.
+            if response is not None and response.finish_reason == "length":
+                last_error = ValueError(
+                    f"Planner output truncated at {max_tokens} tokens; retrying."
+                )
+                logger.warning(str(last_error))
+                continue
+            break
+        else:
+            # All retries exhausted; surface the last error to the caller.
+            raise last_error  # type: ignore[misc]
 
         # Stash usage on the fragment so OPALoop can accumulate tokens
         # without changing the public return type.
