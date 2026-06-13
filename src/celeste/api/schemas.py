@@ -199,3 +199,41 @@ class DeleteAgentResponse(BaseModel):
     """Response for DELETE /agents/{id}."""
 
     success: bool
+
+
+# ---------------------------------------------------------------------------
+# Embedded OPA /api/runs schemas
+# ---------------------------------------------------------------------------
+
+
+class RunRequest(BaseModel):
+    """Request body for POST /api/runs (embedded OPA loop).
+
+    Starts a background OPA-loop run driven by the in-process engine + agent.
+    The run_id returned by the response can be polled via GET /api/runs/{id}.
+    """
+
+    goal: str = Field(min_length=1)
+    max_cycles: int | None = Field(default=None, ge=1)
+    max_llm_tokens: int | None = Field(default=None, ge=1)
+
+
+class RunResponse(BaseModel):
+    """Response for POST /api/runs. Returns immediately (202-style)."""
+
+    run_id: str
+    status: str
+
+
+class RunStatus(BaseModel):
+    """Status for GET /api/runs/{run_id}.
+
+    ``status`` is one of: ``running``, ``completed``, ``paused``, ``failed``.
+    ``workflow_id`` is set once the OPA loop creates the Workflow row; while
+    in-flight it may be ``None``.
+    """
+
+    run_id: str
+    status: str
+    workflow_id: str | None = None
+    error: str | None = None

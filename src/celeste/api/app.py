@@ -18,7 +18,7 @@ import datetime
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -57,12 +57,72 @@ from celeste.api.schemas import (
     AgentStatusResponse,
     AgentListItem,
     DeleteAgentResponse,
+    RunRequest,
+    RunResponse,
+    RunStatus,
 )
 from celeste.core.agent.agent import EnvironmentAgent
+from celeste.toolkits.base import BaseToolkit
+from celeste.toolkits.system_data import SystemDataToolkit
 
 logger = logging.getLogger(__name__)
 
 _API_VERSION = "0.1.0"
+
+
+# ---------------------------------------------------------------------------
+# Default OPA-loop component factories
+#
+# These mirror the wiring in run_local._build_llm_client / the real
+# Planner / Evaluator constructors. They use the LLM client built from the
+# provided settings, so the embedded tier runs the SAME cognitive stack as
+# the local tier by default. Tests override them with fake factories that
+# need no LLM.
+# ---------------------------------------------------------------------------
+
+
+def _build_llm_client(settings: EngineSettings) -> Any:  # noqa: F821 (typing.Any below)
+    """Build the appropriate LLM client from settings (mirrors run_local)."""
+    provider = settings.LLM_PROVIDER
+    if provider == "anthropic":
+        from celeste.core.llm.anthropic import AnthropicClient
+
+        return AnthropicClient(settings)
+    elif provider == "openai":
+        from celeste.core.llm.openai import OpenAIClient
+
+        return OpenAIClient(settings)
+    elif provider == "gemini":
+        from celeste.core.llm.gemini import GeminiClient
+
+        return GeminiClient(settings)
+    elif provider == "ollama":
+        from celeste.core.llm.ollama import OllamaClient
+
+        return OllamaClient(settings)
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def _default_planner_factory(
+    settings: EngineSettings,
+    toolkits: list[BaseToolkit],
+    llm_client: Any,
+) -> Any:
+    """Build the real LLM-backed Planner (default)."""
+    from celeste.core.planner import Planner
+
+    return Planner(llm_client=llm_client, toolkits=toolkits)
+
+
+def _default_evaluator_factory(
+    settings: EngineSettings,
+    llm_client: Any,
+) -> Any:
+    """Build the real LLM-backed Evaluator (default)."""
+    from celeste.core.evaluator import Evaluator
+
+    return Evaluator(llm_client=llm_client)
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +133,10 @@ _API_VERSION = "0.1.0"
 def create_app(
     settings: EngineSettings | None = None,
     workspace_factory: Callable[[], BaseWorkspace] | None = None,
+    toolkits: list[BaseToolkit] | None = None,
+    planner_factory: Callable[..., Any] | None = None,
+    evaluator_factory: Callable[..., Any] | None = None,
+    llm_client: Any = None,
 ) -> FastAPI:
     """Create and configure a FastAPI application instance.
 
@@ -84,6 +148,22 @@ def create_app(
     workspace_factory:
         Callable that returns a ``BaseWorkspace`` instance.
         If ``None`` the engine's default factory is used.
+    toolkits:
+        Toolkits stashed on ``app.state.toolkits`` and used by the embedded
+        ``/api/runs`` endpoint to build the in-process agent. Defaults to a
+        single ``SystemDataToolkit`` so the embedded tier is usable out of
+        the box. Domain toolkits (e.g. ``PharmaColdChainToolkit``) are passed
+        in by the example wiring — core never imports examples.
+    planner_factory:
+        ``callable(settings, toolkits, llm_client) -> Planner``. Defaults to
+        the real LLM-backed ``Planner``. Tests pass a fake that returns a
+        trivial fragment without an LLM.
+    evaluator_factory:
+        ``callable(settings, llm_client) -> Evaluator``. Defaults to the real
+        LLM-backed ``Evaluator``.
+    llm_client:
+        Pre-built LLM client. If ``None`` it is built from ``settings`` (the
+        same logic as ``run_local._build_llm_client``).
     """
 
     engine = Engine(settings=settings, workspace_factory=workspace_factory)
@@ -103,8 +183,32 @@ def create_app(
 
     # Store engine reference on app state for route handlers
     app.state.engine = engine
+    app.state.settings = settings
     app.state.running_tasks: dict[str, asyncio.Task] = {}
     app.state.agent_registry: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------
+    # Embedded OPA-loop state (/api/runs)
+    #
+    # toolkits: the in-process agent's toolkits (default: SystemDataToolkit).
+    #   Domain toolkits are injected by the example wiring (core never
+    #   imports examples).
+    # runs: run_id -> {"status", "workflow_id", "error"} for polling.
+    # running_run_tasks: run_id -> asyncio.Task so in-flight runs can be
+    #   awaited/cancelled on shutdown.
+    # planner_factory / evaluator_factory / llm_client: the cognitive stack
+    #   used by /api/runs. Defaults build the real LLM-backed components;
+    #   tests inject fakes (no LLM).
+    # ------------------------------------------------------------------
+    if toolkits is None:
+        app.state.toolkits: list[BaseToolkit] = [SystemDataToolkit()]
+    else:
+        app.state.toolkits = list(toolkits)
+    app.state.planner_factory = planner_factory or _default_planner_factory
+    app.state.evaluator_factory = evaluator_factory or _default_evaluator_factory
+    app.state.llm_client = llm_client
+    app.state.runs: dict[str, dict[str, Any]] = {}
+    app.state.running_run_tasks: dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------
     # Request-id middleware + global exception handler
@@ -1009,5 +1113,215 @@ def create_app(
             raise HTTPException(status_code=404, detail="Agent not found")
         del app.state.agent_registry[agent_id]
         return DeleteAgentResponse(success=True)
+
+    # ------------------------------------------------------------------
+    # Embedded OPA-loop endpoints: POST /api/runs, GET /api/runs/{run_id}
+    #
+    # These drive the OPA loop (engine.run) inside the same FastAPI process.
+    # The OPA loop persists Workflow + TaskEvent rows to settings.DATABASE_URL
+    # as it runs, so the existing monitoring endpoints
+    # (GET /api/workflows, /api/workflows/{id}/...) surface the run live with
+    # no extra wiring. POST returns immediately (202-style); callers poll
+    # GET /api/runs/{run_id} until a terminal status.
+    # ------------------------------------------------------------------
+
+    @app.post(
+        "/api/runs",
+        response_model=RunResponse,
+        status_code=202,
+        tags=["runs"],
+    )
+    async def start_run(body: RunRequest):
+        """Start an embedded OPA-loop run in the background.
+
+        Builds an in-process agent from ``app.state.toolkits`` plus the
+        configured planner/evaluator factories, launches the OPA loop as a
+        background ``asyncio.Task``, and returns a ``run_id`` immediately.
+        Poll ``GET /api/runs/{run_id}`` for the outcome.
+        """
+        run_id = uuid.uuid4().hex
+        app.state.runs[run_id] = {
+            "status": "running",
+            "workflow_id": None,
+            "error": None,
+        }
+
+        task = asyncio.create_task(_run_opa_loop(app, run_id, body))
+        app.state.running_run_tasks[run_id] = task
+        return RunResponse(run_id=run_id, status="started")
+
+    @app.get(
+        "/api/runs/{run_id}",
+        response_model=RunStatus,
+        tags=["runs"],
+    )
+    async def get_run(run_id: str):
+        """Poll the status of an embedded OPA-loop run."""
+        record = app.state.runs.get(run_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return RunStatus(
+            run_id=run_id,
+            status=record.get("status", "running"),
+            workflow_id=record.get("workflow_id"),
+            error=record.get("error"),
+        )
+
+    # ------------------------------------------------------------------
+    # /api/runs background worker
+    # ------------------------------------------------------------------
+
+    async def _load_pharma_seed_best_effort(db_url: str) -> None:
+        """Best-effort load of pharma seed data into ``db_url``.
+
+        Only invoked when the example seed-data loader is importable (i.e.
+        the examples package is installed / on sys.path). Failures are logged
+        and swallowed so a seed-load bug never masks a real engine bug.
+        """
+        try:
+            from examples.pharma_coldchain.seed_data.load import load_seed_data
+        except Exception:
+            return  # examples not available — nothing to load (core is generic)
+        try:
+            from pathlib import Path
+
+            seed_dir = Path(__file__).resolve().parents[2] / "examples" / "pharma-coldchain" / "seed_data"
+            counts = await load_seed_data(db_url, seed_dir)
+            logger.info("Embedded run: loaded pharma seed data: %s", counts)
+        except Exception as exc:
+            logger.warning(
+                "Embedded run: pharma seed data load failed; cold_chain SQL "
+                "queries may fail. Cause: %s", exc,
+            )
+
+    async def _mark_running_workflow_failed(
+        engine_ref: Engine, workflow_id: uuid.UUID | None, goal: str, exc: BaseException,
+    ) -> None:
+        """Best-effort mark a stuck RUNNING workflow FAILED after a crash.
+
+        Mirrors run_local.py's crash handling: the OPA loop creates a
+        Workflow row with status=RUNNING before the planner runs. If anything
+        raises before the loop flips the status, the row would stay RUNNING
+        forever. Mark it FAILED here so observers see the truth.
+        """
+        try:
+            from sqlalchemy import select as _select
+
+            target_id = workflow_id
+            if target_id is None:
+                async with get_session() as session:
+                    result = await session.execute(
+                        _select(Workflow)
+                        .where(Workflow.name == goal)
+                        .where(Workflow.status == WorkflowStatus.RUNNING)
+                        .order_by(Workflow.created_at.desc())
+                        .limit(1)
+                    )
+                    wf = result.scalar_one_or_none()
+                    if wf is not None:
+                        target_id = wf.id
+
+            if target_id is None:
+                return
+            async with get_session() as session:
+                result = await session.execute(
+                    _select(Workflow).where(Workflow.id == target_id)
+                )
+                wf = result.scalar_one_or_none()
+                if wf is not None and wf.status not in (
+                    WorkflowStatus.COMPLETED,
+                    WorkflowStatus.FAILED,
+                    WorkflowStatus.CANCELLED,
+                ):
+                    wf.status = WorkflowStatus.FAILED
+                    await session.commit()
+                    logger.info(
+                        "Embedded run: marked workflow %s FAILED after crash",
+                        target_id,
+                    )
+        except Exception:
+            logger.error(
+                "Embedded run: failed to mark workflow FAILED after crash",
+                exc_info=True,
+            )
+
+    async def _run_opa_loop(app: FastAPI, run_id: str, body: RunRequest) -> None:
+        """Background task that drives a single OPA-loop run.
+
+        (a) best-effort load pharma seed data into settings.DATABASE_URL,
+        (b) build agent = EnvironmentAgent.in_process(...),
+        (c) build planner/evaluator via the injected factories,
+        (d) await engine.run(goal, agent, planner, evaluator, ...),
+        (e) store the outcome in app.state.runs[run_id]; on exception set
+            status="failed" and mark any RUNNING workflow FAILED.
+        """
+        settings_ref: EngineSettings = app.state.settings
+        engine_ref: Engine = app.state.engine
+        goal = body.goal
+        run_kwargs: dict[str, Any] = {}
+        if body.max_cycles is not None:
+            run_kwargs["max_cycles"] = body.max_cycles
+        if body.max_llm_tokens is not None:
+            run_kwargs["max_llm_tokens"] = body.max_llm_tokens
+
+        try:
+            # (a) best-effort seed load.
+            db_url = settings_ref.DATABASE_URL.get_secret_value()
+            await _load_pharma_seed_best_effort(db_url)
+
+            # (b) in-process agent carrying the configured toolkits.
+            agent = EnvironmentAgent.in_process(
+                workdir=".", toolkits=app.state.toolkits
+            )
+
+            # (c) build the cognitive stack via the injected factories.
+            llm_client = app.state.llm_client
+            if llm_client is None:
+                llm_client = _build_llm_client(settings_ref)
+            planner = app.state.planner_factory(settings_ref, app.state.toolkits, llm_client)
+            evaluator = app.state.evaluator_factory(settings_ref, llm_client)
+
+            # (d) drive the OPA loop.
+            workflow_result = await engine_ref.run(
+                goal=goal,
+                agent=agent,
+                planner=planner,
+                evaluator=evaluator,
+                **run_kwargs,
+            )
+
+            wf_id = (
+                str(workflow_result.workflow_id)
+                if workflow_result and workflow_result.workflow_id
+                else None
+            )
+            status = workflow_result.status if workflow_result else "unknown"
+            app.state.runs[run_id] = {
+                "status": status,
+                "workflow_id": wf_id,
+                "error": None,
+            }
+            logger.info(
+                "Embedded run %s completed: status=%s workflow_id=%s",
+                run_id, status, wf_id,
+            )
+        except asyncio.CancelledError:
+            # Propagate cancellation; leave the run marked running so the
+            # caller sees it was interrupted.
+            raise
+        except Exception as exc:
+            logger.error(
+                "Embedded run %s failed: %s", run_id, exc, exc_info=True,
+            )
+            # The workflow_id is unknown to us on this path — let the
+            # best-effort crash handler find the stuck RUNNING row.
+            await _mark_running_workflow_failed(engine_ref, None, goal, exc)
+            app.state.runs[run_id] = {
+                "status": "failed",
+                "workflow_id": app.state.runs.get(run_id, {}).get("workflow_id"),
+                "error": str(exc),
+            }
+        finally:
+            app.state.running_run_tasks.pop(run_id, None)
 
     return app

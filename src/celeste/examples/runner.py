@@ -299,14 +299,113 @@ class ExampleRunner:
         self,
         goal: str,
         app: Any,
+        *,
+        max_cycles: int | None = None,
+        max_llm_tokens: int | None = None,
+        poll_timeout: float = 120.0,
     ) -> ExampleResult:
-        """Run the scenario in embedded mode (FastAPI app)."""
-        # Embedded mode requires an ASGI test client.
-        # This is a stub for the runner interface.
-        return ExampleResult(
-            mode="embedded",
-            errors=["Embedded mode not yet implemented in ExampleRunner"],
-        )
+        """Run the scenario in embedded mode (engine inside a FastAPI app).
+
+        Drives the OPA loop via the FastAPI ``POST /api/runs`` endpoint over
+        an in-process ASGI transport (no real network socket), polling until
+        a terminal status. The app must already be built with
+        :func:`celeste.api.app.create_app` (toolkits + planner/evaluator
+        factories wired by the caller); this method only orchestrates the
+        HTTP drive + result collection.
+
+        Because the OPA loop persists Workflow/TaskEvent rows as it runs,
+        the run is observable through the app's existing monitoring
+        endpoints.
+
+        Args:
+            goal: The workflow goal text.
+            app: A FastAPI app built via ``create_app`` with the desired
+                toolkits + cognitive-stack factories injected.
+            max_cycles: Optional OPA-cycle cap forwarded to the run.
+            max_llm_tokens: Optional token cap forwarded to the run.
+            poll_timeout: Max seconds to wait for a terminal status.
+
+        Returns:
+            An :class:`ExampleResult` with ``mode="embedded"`` and the
+            :class:`WorkflowResult` reconstructed from the run status (when
+            available). On error the ``errors`` list is populated.
+        """
+        import httpx
+
+        from celeste.core.opa_loop import WorkflowResult
+
+        _TERMINAL = {"completed", "paused", "failed", "escalated", "cancelled"}
+
+        # Drive the lifespan so the engine starts/stops cleanly.
+        lifespan_cm = app.router.lifespan_context(app)
+        await lifespan_cm.__aenter__()
+        try:
+            payload: dict[str, Any] = {"goal": goal}
+            if max_cycles is not None:
+                payload["max_cycles"] = max_cycles
+            if max_llm_tokens is not None:
+                payload["max_llm_tokens"] = max_llm_tokens
+
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://embedded"
+            ) as client:
+                resp = await client.post("/api/runs", json=payload)
+                resp.raise_for_status()
+                run_id = resp.json()["run_id"]
+
+                deadline = asyncio.get_event_loop().time() + poll_timeout
+                status_payload: dict[str, Any] = {"status": "unknown"}
+                while asyncio.get_event_loop().time() < deadline:
+                    r = await client.get(f"/api/runs/{run_id}")
+                    r.raise_for_status()
+                    status_payload = r.json()
+                    if status_payload.get("status") in _TERMINAL:
+                        break
+                    await asyncio.sleep(0.1)
+
+            workflow_result: WorkflowResult | None = None
+            wf_id_str = status_payload.get("workflow_id")
+            if wf_id_str:
+                import uuid as _uuid
+
+                workflow_result = WorkflowResult(
+                    status=status_payload.get("status", "unknown"),
+                    cycle_count=0,
+                    llm_tokens_accumulated=0,
+                    workflow_id=_uuid.UUID(wf_id_str),
+                )
+
+            errors: list[str] = []
+            if status_payload.get("status") == "failed":
+                errors.append(status_payload.get("error") or "run failed")
+            elif status_payload.get("status") not in {"completed", "paused"}:
+                errors.append(
+                    f"embedded run ended in non-terminal status "
+                    f"{status_payload.get('status')!r}"
+                )
+
+            return ExampleResult(
+                mode="embedded",
+                workflow_result=workflow_result,
+                errors=errors,
+            )
+        except Exception as exc:  # pragma: no cover - surface as ExampleResult error
+            logger.exception("Embedded run failed")
+            return ExampleResult(mode="embedded", errors=[str(exc)])
+        finally:
+            # Cancel any lingering background run tasks before teardown.
+            if hasattr(app.state, "running_run_tasks"):
+                for rid, task in list(app.state.running_run_tasks.items()):
+                    if not task.done():
+                        task.cancel()
+                for rid, task in list(app.state.running_run_tasks.items()):
+                    try:
+                        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
+                app.state.running_run_tasks.clear()
+            await lifespan_cm.__aexit__(None, None, None)
 
     # ------------------------------------------------------------------
     # Verification
