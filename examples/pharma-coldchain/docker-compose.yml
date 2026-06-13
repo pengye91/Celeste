@@ -1,28 +1,23 @@
 # Pharma Cold-Chain: Real Infrastructure Stack
 # =============================================
 #
-# This compose file provisions only the **infrastructure** services that
-# the example actually needs (Postgres, Redis, Mailhog). Domain services
-# that were previously included (iot-telemetry-server, customs-api,
-# celeste-agent) have been removed because they referenced files and
-# modules that do not exist in the repo. See:
-#
-#   - PHARMA-1:  iot-telemetry-server + customs-api tried to run a
-#                `server.py` that was never mounted.
-#   - PHARMA-14: celeste-agent ran `pip install celeste`, which pulls
-#                an unrelated PyPI package and shadows the in-tree
-#                engine.
-#   - DX-006:    celeste-agent invoked `python -m celeste.core.agent.serve`,
-#                a module that does not exist.
-#
-# To re-enable domain services, add a real server.py to seed_data/ and
-# a real `celeste.core.agent.serve` module, then re-enable the entries
-# below.
+# This compose file provisions the infrastructure services the example needs
+# (Postgres, Redis, Mailhog) plus a real Celeste agent server for the remote
+# tier. The agent server uses the IN-TREE engine via an editable install of
+# the local src/celeste package — it never pulls the unrelated public PyPI
+# "celeste" package (PHARMA-14) and never references a missing module
+# (DX-006: celeste.core.agent.serve now exists, but the pharma wrapper
+# examples/pharma-coldchain/serve_agent.py is the canonical entry point).
 #
 # Quick start:
 #   cp .env.example .env          # Edit .env with LLM_API_KEY
-#   docker compose up -d          # Start infrastructure services
-#   python run_local.py           # Run the pharma scenario
+#   docker compose up -d          # Start all services
+#   python run_remote.py          # Drive the OPA loop against celeste-agent
+#
+# Local development (no Docker for the agent):
+#   docker compose up -d postgres-hub redis-cache email-gateway
+#   python serve_agent.py --port 8900
+#   python run_remote.py --agent-url ws://localhost:8900/ws
 
 version: "3.9"
 
@@ -71,17 +66,36 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------------
-  # Domain Services (DISABLED — see header above)
+  # Celeste Agent Server (remote tier)
   # ------------------------------------------------------------------
-  #
-  # The following services were removed because their commands referenced
-  # files/modules that don't exist in this repo. Re-enable them after
-  # providing the missing pieces.
-  #
-  #   iot-telemetry-server: needs seed_data/server.py
-  #   customs-api:          needs seed_data/server.py
-  #   celeste-agent:        needs src/celeste/core/agent/serve.py AND
-  #                         a mount of the in-tree src/celeste (PHARMA-14)
+  # Runs the pharma-specific agent server via the IN-TREE install. The repo
+  # is mounted at /app and celeste is editable-installed from ./src, so the
+  # server uses the in-tree engine (NOT the unrelated PyPI "celeste").
+  # The serve_agent.py wrapper registers SystemDataToolkit + the pharma
+  # cold-chain toolkit and loads seed data into the shared Postgres.
+
+  celeste-agent:
+    build:
+      context: ..
+      dockerfile: examples/pharma-coldchain/Dockerfile.agent
+    container_name: pharma-celeste-agent
+    depends_on:
+      postgres-hub:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://celeste:celeste@postgres-hub:5432/pharma_coldchain"
+    command:
+      - python
+      - examples/pharma-coldchain/serve_agent.py
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8900"
+      - --database-url
+      - "postgresql+asyncpg://celeste:celeste@postgres-hub:5432/pharma_coldchain"
+    ports:
+      - "8900:8900"
+    restart: unless-stopped
 
 volumes:
   postgres_data:

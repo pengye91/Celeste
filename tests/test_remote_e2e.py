@@ -1,5 +1,7 @@
 """End-to-end tests for Celeste-DAG remote agent via WebSocket."""
 
+import asyncio
+
 import pytest
 
 from celeste.core.agent.agent import EnvironmentAgent
@@ -249,3 +251,86 @@ async def test_e2e_remote_call_tool_toolkit():
             await client_agent.stop()
     finally:
         await server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Serve-mode lifecycle: EnvironmentAgent.serve(...).start() must bind a port
+# and stop() must release it (regression guard for the serve() runner).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_serve_mode_start_binds_port_stop_releases():
+    """EnvironmentAgent.serve(...).start() binds a port; stop() releases it.
+
+    The serve() factory sets agent._server; start() must start the
+    WebSocketServer (not just connect a transport), and stop() must release
+    the bound socket so the port is free again.
+    """
+    pytest.importorskip("websockets")
+
+    agent = EnvironmentAgent.serve(host="127.0.0.1", port=0, workdir=".")
+    # _server must be set by the serve() factory.
+    assert getattr(agent, "_server", None) is not None
+
+    await agent.start()
+    assert agent.is_running
+
+    # The server must have bound a real port (port=0 -> OS-assigned).
+    bound_port = agent._server._port
+    assert isinstance(bound_port, int) and bound_port > 0
+
+    try:
+        # A client should be able to connect to the served agent and list tools.
+        url = f"ws://127.0.0.1:{bound_port}"
+        client = EnvironmentAgent.remote(url=url)
+        await client.start()
+        try:
+            tools = await client.list_tools()
+            assert isinstance(tools, list)
+            names = [t["name"] for t in tools]
+            # Built-in tools must be advertised by the served agent.
+            assert "read_file" in names
+        finally:
+            await client.stop()
+    finally:
+        await agent.stop()
+
+    # After stop(), the agent is no longer running and the server socket is gone.
+    assert not agent.is_running
+    assert agent._server._server is None
+
+
+@pytest.mark.asyncio
+async def test_serve_mode_idempotent_stop():
+    """Calling stop() on a serve-mode agent twice must not raise."""
+    pytest.importorskip("websockets")
+
+    agent = EnvironmentAgent.serve(host="127.0.0.1", port=0, workdir=".")
+    await agent.start()
+    await agent.stop()
+    # Second stop() must be a safe no-op (idempotent teardown).
+    await agent.stop()
+    assert not agent.is_running
+
+
+@pytest.mark.asyncio
+async def test_serve_module_serve_coroutine_runs_and_cancels():
+    """celeste.core.agent.serve.serve() runs until cancelled, then stops cleanly."""
+    pytest.importorskip("websockets")
+    from celeste.core.agent.serve import serve
+
+    task = asyncio.create_task(
+        serve(host="127.0.0.1", port=0, workdir=".", toolkits=None)
+    )
+    # Give the server a moment to bind.
+    await asyncio.sleep(0.3)
+    assert not task.done(), "serve() should still be running (blocking)"
+
+    # Cancel -> graceful shutdown via the finally clause.
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert task.done()

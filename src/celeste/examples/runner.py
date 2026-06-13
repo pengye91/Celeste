@@ -191,15 +191,109 @@ class ExampleRunner:
     async def run_remote(
         self,
         goal: str,
-        agent_url: str,
+        agent: Any,
+        planner: Any,
+        evaluator: Any,
+        *,
+        server_toolkits: list[Any] | None = None,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        auth_token: str | None = None,
+        agent_url: str | None = None,
     ) -> ExampleResult:
-        """Run the scenario in remote mode (WebSocket agent)."""
-        # Remote mode requires a running agent server.
-        # This is a stub for the runner interface.
-        return ExampleResult(
-            mode="remote",
-            errors=["Remote mode not yet implemented in ExampleRunner"],
-        )
+        """Run the scenario in remote mode (WebSocket agent).
+
+        Self-contained and testable: spins up an in-process
+        :class:`WebSocketServer` (owning the drivers + ``server_toolkits``)
+        as a background task, connects a remote client agent, and drives the
+        OPA loop. Every ``agent.call_tool`` / ``agent.list_tools`` call
+        crosses a real WebSocket to the server.
+
+        Args:
+            goal: The workflow goal text.
+            agent: The CLIENT agent to drive (must be a remote agent built
+                via ``EnvironmentAgent.remote``). If ``agent_url`` is given
+                the caller is responsible for that agent's lifecycle; if a
+                server is spun up in-process a fresh client is built.
+            planner: Injected planner (no LLM needed in tests).
+            evaluator: Injected evaluator.
+            server_toolkits: Toolkits to register on the SERVER agent. The
+                server owns execution; the client only forwards requests.
+            host: Bind host for the in-process server.
+            port: Bind port for the in-process server (0 = OS-chosen).
+            auth_token: Optional bearer token for the in-process server.
+            agent_url: If provided, connect to this external server instead
+                of spinning up an in-process one. In that case ``agent`` is
+                ignored and a fresh client is built.
+
+        Returns:
+            An :class:`ExampleResult` with ``mode="remote"``.
+        """
+        from celeste.core.agent.agent import EnvironmentAgent
+        from celeste.core.agent.transport_ws import WebSocketServer
+        from celeste.core.engine import Engine
+
+        server: WebSocketServer | None = None
+        server_agent: EnvironmentAgent | None = None
+        client_agent: EnvironmentAgent | None = None
+        client_started = False
+
+        try:
+            if agent_url is None:
+                # Spin up an in-process server that owns the toolkits.
+                server_agent = EnvironmentAgent.in_process(
+                    workdir=".",
+                    toolkits=server_toolkits or [],
+                )
+                server = WebSocketServer(
+                    host=host, port=port, agent=server_agent, auth_token=auth_token
+                )
+                await server.start()
+                addr = server._server.sockets[0].getsockname()
+                agent_url = f"ws://{addr[0]}:{addr[1]}"
+                logger.info("In-process agent server started at %s", agent_url)
+
+            # Decide which client agent drives the OPA loop. If we spun up
+            # our own in-process server (server is not None) or the caller
+            # passed no agent, build a fresh remote client connected to it.
+            # Otherwise reuse the caller-provided agent (already connected
+            # to an external server at agent_url).
+            if server is not None or agent is None:
+                client_agent = EnvironmentAgent.remote(
+                    url=agent_url, auth_token=auth_token
+                )
+                await client_agent.start()
+                client_started = True
+                effective_agent = client_agent
+            else:
+                effective_agent = agent
+
+            engine = Engine()
+            await engine.start()
+            try:
+                result = await engine.run(
+                    goal=goal,
+                    agent=effective_agent,
+                    planner=planner,
+                    evaluator=evaluator,
+                )
+                return ExampleResult(mode="remote", workflow_result=result)
+            finally:
+                await engine.stop()
+        except Exception as exc:  # pragma: no cover - surface as ExampleResult error
+            logger.exception("Remote run failed")
+            return ExampleResult(mode="remote", errors=[str(exc)])
+        finally:
+            if client_started and client_agent is not None:
+                try:
+                    await client_agent.stop()
+                except Exception:  # pragma: no cover
+                    pass
+            if server is not None:
+                try:
+                    await server.stop()
+                except Exception:  # pragma: no cover
+                    pass
 
     async def run_embedded(
         self,

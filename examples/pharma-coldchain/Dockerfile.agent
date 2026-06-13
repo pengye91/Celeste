@@ -1,0 +1,22 @@
+# Dockerfile.agent — Celeste agent server for the pharma cold-chain remote tier.
+#
+# Uses the IN-TREE engine: the repo is copied in and celeste is
+# editable-installed from ./src, so the server runs the in-tree engine and
+# never pulls the unrelated public PyPI "celeste" package (PHARMA-14).
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime deps. We copy only the metadata first for layer caching.
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+COPY examples/ ./examples/
+
+# Editable-install the in-tree celeste package and its dependencies. This
+# installs the LOCAL src/celeste, not a PyPI package.
+RUN pip install --no-cache-dir -e .
+
+# The agent server is started via the compose `command` directive, which
+# runs `python examples/pharma-coldchain/serve_agent.py`.
+CMD ["python", "examples/pharma-coldchain/serve_agent.py", "--host", "0.0.0.0", "--port", "8900"]
