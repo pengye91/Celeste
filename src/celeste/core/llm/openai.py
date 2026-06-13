@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from celeste.config.settings import EngineSettings
 from celeste.core.llm.base import (
@@ -17,6 +18,7 @@ from celeste.core.llm.base import (
     LLMMessage,
     LLMResponse,
     ToolCallDef,
+    _extract_json_payload,
 )
 
 
@@ -114,3 +116,30 @@ class OpenAIClient(BaseLLMClient):
 
     async def close(self) -> None:
         """Shut down the underlying ``AsyncOpenAI`` client."""
+
+    async def structured_output_with_usage(
+        self,
+        messages: list[LLMMessage],
+        response_model: type[BaseModel],
+        *,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+    ) -> tuple[LLMResponse | None, BaseModel]:
+        """Run ``complete()`` directly so we keep the LLMResponse for usage.
+
+        The default base implementation calls ``structured_output()`` which
+        discards the response. For providers where ``complete()`` already
+        returns usage (like the OpenAI-compatible clients here) we can just
+        call it once and parse the payload through the same envelope
+        extractor used by ``structured_output``.
+        """
+        response = await self.complete(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        payload = _extract_json_payload(response.content)
+        parsed = response_model.model_validate_json(payload)
+        return response, parsed
