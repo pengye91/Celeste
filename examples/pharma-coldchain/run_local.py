@@ -216,6 +216,64 @@ async def run_pharma_local(
                 logger.warning(
                     "Could not generate evaluation report: %s", exc
                 )
+    except Exception as exc:
+        # The OPA loop creates a Workflow row with status=RUNNING before
+        # the planner runs. If anything raises before the loop can flip the
+        # status (e.g. truncated JSON from the LLM), the row stays RUNNING
+        # forever and CMC shows a stuck workflow. Mark the row FAILED here
+        # so observers see the truth, then re-raise to preserve the
+        # original traceback.
+        logger.error(
+            "Engine crashed during pharma cold-chain workflow: %s", exc,
+            exc_info=True,
+        )
+        try:
+            from celeste.database.db import get_session
+            from celeste.database.models import (
+                Workflow,
+                WorkflowStatus,
+            )
+            from sqlalchemy import select
+            import uuid as _uuid
+
+            target_id: _uuid.UUID | None = None
+            if workflow_result is not None and workflow_result.workflow_id:
+                target_id = workflow_result.workflow_id
+            else:
+                # Workflow row may have been created but not yet surfaced
+                # back to us (e.g. crash before WorkflowResult returned).
+                # Fall back to the most-recent RUNNING workflow for this
+                # goal name as a best-effort.
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Workflow)
+                        .where(Workflow.name == goal)
+                        .where(Workflow.status == WorkflowStatus.RUNNING)
+                        .order_by(Workflow.created_at.desc())
+                        .limit(1)
+                    )
+                    wf = result.scalar_one_or_none()
+                    if wf is not None:
+                        target_id = wf.id
+
+            if target_id is not None:
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(Workflow).where(Workflow.id == target_id)
+                    )
+                    wf = result.scalar_one_or_none()
+                    if wf is not None:
+                        wf.status = WorkflowStatus.FAILED
+                        logger.info(
+                            "Marked workflow %s as FAILED after crash",
+                            target_id,
+                        )
+        except Exception:
+            # Don't let cleanup mask the original exception.
+            logger.error(
+                "Failed to mark workflow FAILED after crash", exc_info=True,
+            )
+        raise
     finally:
         await engine.stop()
         logger.info("Engine stopped")
