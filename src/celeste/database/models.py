@@ -82,8 +82,6 @@ class TaskEventType(str, enum.Enum):
     PRECONDITION_CHECKED = "precondition_checked"
     CYCLE_STARTED = "cycle_started"
     CHECKPOINT = "checkpoint"
-
-    # Human-in-the-loop event types
     ESCALATE = "escalate"
     WORKFLOW_PAUSED = "workflow_paused"
     HUMAN_INPUT_RECEIVED = "human_input_received"
