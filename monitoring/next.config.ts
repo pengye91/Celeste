@@ -11,6 +11,13 @@ const API_BASE_URL =
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // In Next.js 16 the dev server blocks cross-origin requests to dev
+  // resources (HMR, source maps) by default. When the API is on
+  // 127.0.0.1:8000 and CMC is on 127.0.0.1:3000, the browser treats
+  // the cross-origin policy strictly, which prevents client-side
+  // hydration from completing and silently kills React Query fetches.
+  // Allowing both loopback hostnames keeps hydration working in dev.
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   async rewrites() {
     return [
       {

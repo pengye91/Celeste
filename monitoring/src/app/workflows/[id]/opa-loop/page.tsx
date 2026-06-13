@@ -8,7 +8,7 @@ import {
   useWorkflow,
   useWorkflowMetrics,
 } from "@/hooks/useWorkflow";
-import { useWorkflowEvents } from "@/hooks/useWorkflowEvents";
+import { useWorkflowEvents, useWorkflowWorkflowEvents } from "@/hooks/useWorkflowEvents";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { formatTimestamp, formatDuration } from "@/lib/format";
 import { WorkflowNav } from "@/components/workflow/workflow-nav";
@@ -53,9 +53,9 @@ interface Cycle {
 // ------------------------------------------------------------------
 
 const OPA_CYCLE_EVENT_TYPES = [
-  "observation",
+  "observation_captured",
   "plan_generated",
-  "evaluation",
+  "evaluation_result",
   "cycle_started",
   "workflow_paused",
   "workflow_resumed",
@@ -192,7 +192,7 @@ function parseCycles(events: { id: string; event_type: string; event_data: Recor
 
   for (let i = 0; i < sorted.length; i++) {
     const event = sorted[i];
-    const isCycleStart = event.event_type === "observation" || event.event_type === "cycle_started";
+    const isCycleStart = event.event_type === "observation_captured" || event.event_type === "cycle_started";
 
     if (isCycleStart && currentCycle) {
       // Finalize previous cycle
@@ -222,7 +222,7 @@ function parseCycles(events: { id: string; event_type: string; event_data: Recor
       if (event.event_type === "plan_generated") {
         currentCycle.planFragment = getPlanFragment(event.event_data);
         currentCycle.nodeCount = getNodeCountFromPlan(event.event_data);
-      } else if (event.event_type === "evaluation") {
+      } else if (event.event_type === "evaluation_result") {
         currentCycle.evaluatorDecision = getEvaluatorDecision(event.event_data);
         if (currentCycle.tokenCount === null) {
           currentCycle.tokenCount = getTokenCount(event.event_data);
@@ -385,7 +385,7 @@ function OPALoopPageInner({
   const { id } = use(params);
   const { data: workflow, isLoading: wfLoading, error: wfError } = useWorkflow(id);
   const { data: metrics } = useWorkflowMetrics(id);
-  const { data: allEvents, isLoading: eventsLoading, error: eventsError } = useWorkflowEvents(id, {
+  const { data: allEvents, isLoading: eventsLoading, error: eventsError } = useWorkflowWorkflowEvents(id, {
     limit: 200,
   });
 
