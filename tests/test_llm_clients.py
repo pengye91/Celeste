@@ -746,13 +746,20 @@ class TestOpenAIAdapter:
 
     @pytest.mark.asyncio
     async def test_close_cleans_up(self) -> None:
+        """F013: OpenAIClient.close() must close the underlying AsyncOpenAI
+        client (httpx connection pool). The previous implementation had an
+        empty body that silently leaked connections.
+        """
         from celeste.core.llm.openai import OpenAIClient
 
         settings = self._make_settings()
         with patch("celeste.core.llm.openai.AsyncOpenAI") as MockAsyncOpenAI:
-            MockAsyncOpenAI.return_value = MagicMock()
+            mock_instance = MagicMock()
+            mock_instance.close = AsyncMock()
+            MockAsyncOpenAI.return_value = mock_instance
             client = OpenAIClient(settings)
             await client.close()
+            mock_instance.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_api_key_passed_to_sdk(self) -> None:

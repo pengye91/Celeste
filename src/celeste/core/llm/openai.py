@@ -116,6 +116,7 @@ class OpenAIClient(BaseLLMClient):
 
     async def close(self) -> None:
         """Shut down the underlying ``AsyncOpenAI`` client."""
+        await self._client.close()
 
     async def structured_output_with_usage(
         self,
