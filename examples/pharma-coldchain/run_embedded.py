@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -72,7 +73,9 @@ try:
 except Exception:  # pragma: no cover - import guard for stripped envs
     _PHARMA_TOOLKIT_AVAILABLE = False
 
-from examples.pharma_coldchain.seed_data.load import load_seed_data  # noqa: F401
+# This module (examples/) IS allowed to import the pharma seed loader.
+# It passes it into create_app via DI so src/celeste/** stays decoupled.
+from examples.pharma_coldchain.seed_data.load import load_seed_data
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,6 +83,11 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# The seed-data directory lives next to this script (the caller owns the
+# path; core never computes it). This fixes the old off-by-one bug where
+# app.py resolved parents[2] -> src/examples/... (NONEXISTENT).
+_SEED_DIR = Path(__file__).resolve().parent / "seed_data"
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +228,8 @@ async def run_pharma_embedded(
         planner_factory=_planner_factory,
         evaluator_factory=_evaluator_factory,
         llm_client=llm_client,
+        seed_loader=load_seed_data,
+        seed_dir=_SEED_DIR,
     )
 
     the_goal = goal or _load_goal()
@@ -286,6 +296,11 @@ async def _serve_and_run(
     status (or ``timeout``). Intended for the monitoring-UI use case where
     CMC at :3000 proxies to this server.
     """
+    # uvicorn is imported lazily inside this function so the module can be
+    # imported (and the in-process path used) without uvicorn installed,
+    # and so _serve_and_run is independently callable.
+    import uvicorn
+
     def _planner_factory(s, tks, llm):
         return Planner(llm_client=llm, toolkits=tks)
 
@@ -298,12 +313,14 @@ async def _serve_and_run(
         planner_factory=_planner_factory,
         evaluator_factory=_evaluator_factory,
         llm_client=llm_client,
+        seed_loader=load_seed_data,
+        seed_dir=_SEED_DIR,
     )
 
-    config = uvicorn.Config(  # type: ignore[name-defined]
+    config = uvicorn.Config(
         app, host=host, port=port, log_level="info", lifespan="on",
     )
-    server = uvicorn.Server(config)  # type: ignore[name-defined]
+    server = uvicorn.Server(config)
 
     server_task = asyncio.create_task(server.serve())
     # Wait for the server socket to come up.
@@ -383,8 +400,6 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.serve:
-        import uvicorn  # imported lazily so non-serve runs don't require it at module load
-
         settings = _build_settings(database_url=args.database_url, api_key=args.api_key)
         toolkits = _embedded_toolkits()
         llm_client = _build_llm_client(settings)

@@ -228,9 +228,20 @@ class RunResponse(BaseModel):
 class RunStatus(BaseModel):
     """Status for GET /api/runs/{run_id}.
 
-    ``status`` is one of: ``running``, ``completed``, ``paused``, ``failed``.
+    ``status`` is one of:
+
+    - ``running`` — the OPA loop is in progress (non-terminal).
+    - ``paused`` — the loop paused awaiting input (non-terminal).
+    - ``completed`` — the goal was achieved (terminal).
+    - ``escalated`` — the loop escalated to a human (terminal).
+    - ``failed`` — the run errored or was cancelled at shutdown (terminal).
+    - ``cancelled`` — the run was explicitly cancelled (terminal).
+
+    Terminal statuses are ``completed``, ``escalated``, ``failed`` and
+    ``cancelled``; callers can stop polling once one of these is observed.
     ``workflow_id`` is set once the OPA loop creates the Workflow row; while
-    in-flight it may be ``None``.
+    in-flight it may be ``None``. ``error`` carries a short message when
+    ``status == "failed"``.
     """
 
     run_id: str

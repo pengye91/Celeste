@@ -137,6 +137,8 @@ def create_app(
     planner_factory: Callable[..., Any] | None = None,
     evaluator_factory: Callable[..., Any] | None = None,
     llm_client: Any = None,
+    seed_loader: Callable[[str, Any], Any] | None = None,
+    seed_dir: Any | None = None,
 ) -> FastAPI:
     """Create and configure a FastAPI application instance.
 
@@ -164,16 +166,59 @@ def create_app(
     llm_client:
         Pre-built LLM client. If ``None`` it is built from ``settings`` (the
         same logic as ``run_local._build_llm_client``).
+    seed_loader:
+        Optional async callable ``(db_url: str, seed_dir: Path) -> Any`` used
+        by the ``/api/runs`` background worker to seed the run's database
+        before the OPA loop starts. Injected by example wiring (e.g.
+        ``run_embedded.py``) — **core never imports the example seed loader**.
+        If ``None`` (default) seed loading is skipped entirely, keeping core
+        generic and decoupled from ``examples/**``. Both ``seed_loader`` AND
+        ``seed_dir`` must be provided for seeding to run.
+    seed_dir:
+        Path to the seed-data directory (the caller knows the correct path;
+        core never computes it). Passed straight through to ``seed_loader``.
+        If ``None`` (default) seed loading is skipped.
     """
 
     engine = Engine(settings=settings, workspace_factory=workspace_factory)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        """Manage engine lifecycle: start on startup, stop on shutdown."""
+        """Manage engine lifecycle: start on startup, stop on shutdown.
+
+        On shutdown (after ``engine.stop()``) this cancels every in-flight
+        ``/api/runs`` background task and marks any run still at status
+        ``"running"`` as ``"failed"`` (error=``"shutdown"``) so observers see
+        the truth instead of a run stuck "running" forever. Mirrors the
+        teardown the test fixture / ``run_embedded`` already do manually.
+        """
         await engine.start()
         yield
         await engine.stop()
+
+        # Cancel in-flight /api/runs tasks, then await them with a timeout.
+        # Shielding protects against CancelledError bubbling up here.
+        running_run_tasks: dict[str, asyncio.Task] = getattr(
+            app.state, "running_run_tasks", {}
+        )
+        for rid, task in list(running_run_tasks.items()):
+            if not task.done():
+                task.cancel()
+        if running_run_tasks:
+            try:
+                await asyncio.wait(
+                    [t for t in running_run_tasks.values()],
+                    timeout=2.0,
+                )
+            except asyncio.CancelledError:
+                pass
+
+        # Flip any run still at status "running" to "failed" (error="shutdown").
+        runs: dict[str, dict[str, Any]] = getattr(app.state, "runs", {})
+        for rid, record in runs.items():
+            if record.get("status") == "running":
+                record["status"] = "failed"
+                record["error"] = "shutdown"
 
     app = FastAPI(
         title="Celeste-DAG",
@@ -209,6 +254,11 @@ def create_app(
     app.state.llm_client = llm_client
     app.state.runs: dict[str, dict[str, Any]] = {}
     app.state.running_run_tasks: dict[str, asyncio.Task] = {}
+    # Seed loading via DI: the caller (example wiring) injects the loader +
+    # the correct seed_dir. Core never imports the example loader, and never
+    # computes the path itself. When either is None, seeding is skipped.
+    app.state.seed_loader = seed_loader
+    app.state.seed_dir = seed_dir
 
     # ------------------------------------------------------------------
     # Request-id middleware + global exception handler
@@ -1171,26 +1221,26 @@ def create_app(
     # /api/runs background worker
     # ------------------------------------------------------------------
 
-    async def _load_pharma_seed_best_effort(db_url: str) -> None:
-        """Best-effort load of pharma seed data into ``db_url``.
+    async def _load_seed_best_effort(db_url: str) -> None:
+        """Best-effort load of seed data into ``db_url`` via DI.
 
-        Only invoked when the example seed-data loader is importable (i.e.
-        the examples package is installed / on sys.path). Failures are logged
-        and swallowed so a seed-load bug never masks a real engine bug.
+        Uses ``app.state.seed_loader`` and ``app.state.seed_dir`` injected by
+        the caller (example wiring). Core never imports the example loader and
+        never computes the path itself — the caller owns both. When either is
+        ``None`` (the default), seeding is skipped entirely so core stays
+        generic. Failures are logged and swallowed so a seed-load bug never
+        masks a real engine bug.
         """
+        seed_loader = app.state.seed_loader
+        seed_dir = app.state.seed_dir
+        if seed_loader is None or seed_dir is None:
+            return  # no loader injected — nothing to load (core is generic)
         try:
-            from examples.pharma_coldchain.seed_data.load import load_seed_data
-        except Exception:
-            return  # examples not available — nothing to load (core is generic)
-        try:
-            from pathlib import Path
-
-            seed_dir = Path(__file__).resolve().parents[2] / "examples" / "pharma-coldchain" / "seed_data"
-            counts = await load_seed_data(db_url, seed_dir)
-            logger.info("Embedded run: loaded pharma seed data: %s", counts)
+            counts = await seed_loader(db_url, seed_dir)
+            logger.info("Embedded run: loaded seed data: %s", counts)
         except Exception as exc:
             logger.warning(
-                "Embedded run: pharma seed data load failed; cold_chain SQL "
+                "Embedded run: seed data load failed; downstream SQL "
                 "queries may fail. Cause: %s", exc,
             )
 
@@ -1265,9 +1315,9 @@ def create_app(
             run_kwargs["max_llm_tokens"] = body.max_llm_tokens
 
         try:
-            # (a) best-effort seed load.
+            # (a) best-effort seed load via DI (loader + path injected by caller).
             db_url = settings_ref.DATABASE_URL.get_secret_value()
-            await _load_pharma_seed_best_effort(db_url)
+            await _load_seed_best_effort(db_url)
 
             # (b) in-process agent carrying the configured toolkits.
             agent = EnvironmentAgent.in_process(
