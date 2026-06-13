@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import React from "react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import WorkflowsPage from "./page";
 import * as useWorkflowModule from "@/hooks/useWorkflow";
-import type { WorkflowListItem, WorkflowListResponse } from "@/lib/types";
+import type { WorkflowListItem, WorkflowListResponse, WorkflowMetrics } from "@/lib/types";
 
 // ------------------------------------------------------------------
 // Mocks
@@ -187,6 +189,29 @@ function mockWorkflowsQuery({
       typeof useWorkflowModule.useWorkflows
     >
   );
+  // MNT-019: per-workflow metrics are now fetched inside each card
+  // via useWorkflowMetrics. Default mock returns null so the card
+  // shows the em-dash placeholders.
+  vi.spyOn(useWorkflowModule, "useWorkflowMetrics").mockReturnValue(
+    makeMockQueryResult<WorkflowMetrics | null>(null, false, null) as unknown as ReturnType<
+      typeof useWorkflowModule.useWorkflowMetrics
+    >
+  );
+}
+
+async function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  let result: ReturnType<typeof render> | undefined;
+  await act(async () => {
+    result = render(
+      <QueryClientProvider client={queryClient}>
+        <WorkflowsPage />
+      </QueryClientProvider>
+    );
+  });
+  return result!;
 }
 
 // Status filter chips render as buttons whose accessible name is the
@@ -216,9 +241,9 @@ describe("WorkflowsPage — URL state preservation", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the page with default filter (all) and empty search", () => {
+  it("renders the page with default filter (all) and empty search", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     expect(screen.getByTestId("shell")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Workflows", level: 1 })).toBeInTheDocument();
     // Default 'All' chip is active
@@ -226,10 +251,10 @@ describe("WorkflowsPage — URL state preservation", () => {
     expect(allButton).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("reads ?status=running from the URL on initial render", () => {
+  it("reads ?status=running from the URL on initial render", async () => {
     urlState.status = "running";
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     // The 'Running' chip is the active one. Filter chips render as
     // buttons with a `StatusOrb` child (role="img") and visible text,
     // so the accessible name is e.g. "Running status indicator
@@ -240,43 +265,43 @@ describe("WorkflowsPage — URL state preservation", () => {
     expect(all).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("writes ?status=paused to the URL state when a filter chip is clicked", () => {
+  it("writes ?status=paused to the URL state when a filter chip is clicked", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const paused = getStatusChip("Paused");
     fireEvent.click(paused);
     expect(urlState.status).toBe("paused");
   });
 
-  it("toggles a status filter off (back to 'all') when clicked twice", () => {
+  it("toggles a status filter off (back to 'all') when clicked twice", async () => {
     urlState.status = "running";
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const running = getStatusChip("Running");
     fireEvent.click(running);
     expect(urlState.status).toBeUndefined();
   });
 
-  it("falls back to 'all' when the URL status is not in the allow list", () => {
+  it("falls back to 'all' when the URL status is not in the allow list", async () => {
     urlState.status = "garbage";
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const all = getStatusChip("All");
     expect(all).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("writes ?search=alpha when the search input is changed", () => {
+  it("writes ?search=alpha when the search input is changed", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const input = screen.getByLabelText(/search workflows by name/i);
     fireEvent.change(input, { target: { value: "alpha" } });
     expect(urlState.search).toBe("alpha");
   });
 
-  it("clears ?search when the clear-search button is clicked", () => {
+  it("clears ?search when the clear-search button is clicked", async () => {
     urlState.search = "alpha";
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const clear = screen.getByRole("button", { name: /clear search/i });
     fireEvent.click(clear);
     expect(urlState.search).toBeUndefined();
@@ -285,7 +310,7 @@ describe("WorkflowsPage — URL state preservation", () => {
   it("filters the workflow list client-side by the search query", async () => {
     urlState.search = "alpha";
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     await waitFor(() => {
       expect(screen.getByText("Alpha deploy")).toBeInTheDocument();
     });
@@ -297,24 +322,24 @@ describe("WorkflowsPage — URL state preservation", () => {
   // Accessibility
   // ------------------------------------------------------------------
 
-  it("associates the search input with a sr-only label", () => {
+  it("associates the search input with a sr-only label", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const input = screen.getByLabelText(/search workflows by name/i);
     expect(input).toBeInTheDocument();
     expect(input).toHaveAttribute("id", "workflow-search");
   });
 
-  it("groups the status filter chips in a labelled role=group", () => {
+  it("groups the status filter chips in a labelled role=group", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const group = screen.getByRole("group", { name: /filter workflows by status/i });
     expect(group).toBeInTheDocument();
   });
 
-  it("pairs every status filter chip with a StatusOrb that has a label", () => {
+  it("pairs every status filter chip with a StatusOrb that has a label", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     // The page renders 6 status chips (Running, Completed, Failed,
     // Paused, Pending, Cancelled), each with a StatusOrb.
     const orbs = screen.getAllByRole("img");
@@ -323,7 +348,7 @@ describe("WorkflowsPage — URL state preservation", () => {
 
   it("renders a status badge with text content for each workflow card", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     await waitFor(() => {
       expect(screen.getByText("Alpha deploy")).toBeInTheDocument();
     });
@@ -332,9 +357,9 @@ describe("WorkflowsPage — URL state preservation", () => {
     expect(screen.getAllByText("completed").length).toBeGreaterThan(0);
   });
 
-  it("renders the page in a focus-trap-safe way: no positive tabindex traps", () => {
+  it("renders the page in a focus-trap-safe way: no positive tabindex traps", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     // No element should carry a positive tabindex, which would break
     // the natural tab order.
     const positive = document.querySelectorAll('[tabindex]:not([tabindex="-1"]):not([tabindex="0"])');
@@ -345,18 +370,18 @@ describe("WorkflowsPage — URL state preservation", () => {
   // Keyboard shortcuts (j/k/Enter)
   // ------------------------------------------------------------------
 
-  it("renders the workflow grid as a listbox with options", () => {
+  it("renders the workflow grid as a listbox with options", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const listbox = screen.getByRole("listbox", { name: /workflows/i });
     expect(listbox).toBeInTheDocument();
     const options = screen.getAllByRole("option");
     expect(options.length).toBe(2);
   });
 
-  it("marks the first workflow as selected by default", () => {
+  it("marks the first workflow as selected by default", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const options = screen.getAllByRole("option");
     expect(options[0]).toHaveAttribute("aria-selected", "true");
     expect(options[1]).toHaveAttribute("aria-selected", "false");
@@ -366,12 +391,72 @@ describe("WorkflowsPage — URL state preservation", () => {
     const mod = await import("@/hooks/useKeyboardShortcuts");
     const spy = mod.useKeyboardShortcuts as unknown as ReturnType<typeof vi.fn>;
     mockWorkflowsQuery({ data: workflowsResponse });
-    render(<WorkflowsPage />);
+    await renderPage();
     const calls = spy.mock.calls;
     expect(calls.length).toBeGreaterThan(0);
     const last = calls[calls.length - 1][0] as Record<string, unknown>;
     expect(typeof last.j).toBe("function");
     expect(typeof last.k).toBe("function");
     expect(typeof last.Enter).toBe("function");
+  });
+});
+
+// ------------------------------------------------------------------
+// Lane C: MNT-019 — workflow card metrics (no hardcoded zeros)
+// ------------------------------------------------------------------
+
+describe("WorkflowsPage — workflow card metrics (MNT-019)", () => {
+  beforeEach(() => {
+    Object.keys(urlState).forEach((k) => delete urlState[k]);
+    vi.clearAllMocks();
+  });
+
+  // MNT-019 regression: the list page previously hardcoded
+  // progress/cycle_count/node_count/elapsed_seconds to 0 for every
+  // workflow before passing to WorkflowCard, so every metric rendered
+  // as zero. The fix: fetch per-workflow metrics via
+  // useWorkflowMetrics (or a batch equivalent) and merge them so the
+  // cards display real values.
+  it("renders real cycle_count from per-workflow metrics, not 0", async () => {
+    const sampleMetrics: WorkflowMetrics = {
+      workflow_id: "wf-alpha",
+      cycle_count: 7,
+      total_nodes: 12,
+      completed_nodes: 8,
+      failed_nodes: 0,
+      completed_percent: 0.66,
+      elapsed_seconds: 320,
+      llm_tokens_accumulated: 4200,
+      max_concurrent_workspaces: 1,
+      security_pass_rate: 1.0,
+    };
+    mockWorkflowsQuery({ data: workflowsResponse });
+    // Mock useWorkflowMetrics to return a real value for wf-alpha.
+    vi.spyOn(useWorkflowModule, "useWorkflowMetrics").mockImplementation(
+      (id: string) => {
+        const data = id === "wf-alpha" ? sampleMetrics : null;
+        return makeMockQueryResult<WorkflowMetrics | null>(data, false, null) as unknown as ReturnType<
+          typeof useWorkflowModule.useWorkflowMetrics
+        >;
+      }
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <WorkflowsPage />
+        </QueryClientProvider>
+      );
+    });
+
+    // The metrics strip on the wf-alpha card should show "7" (cycles)
+    // — not "0".
+    const cards = screen.getAllByRole("option");
+    const alphaCard = cards.find((c) => c.getAttribute("data-workflow-id") === "wf-alpha");
+    expect(alphaCard).toBeDefined();
+    expect(alphaCard!.textContent).toContain("7");
   });
 });

@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { StatusOrb } from "@/components/ui/status-orb";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useWorkflows } from "@/hooks/useWorkflow";
+import { useWorkflows, useWorkflowMetrics } from "@/hooks/useWorkflow";
+import type { WorkflowMetrics } from "@/lib/types";
 import { useUrlState } from "@/hooks/useUrlState";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { formatRelativeTime } from "@/lib/format";
@@ -76,6 +77,38 @@ function ProgressArc({ progress }: { progress: number }) {
         {Math.round(progress * 100)}%
       </span>
     </div>
+  );
+}
+
+function WorkflowCardWithMetrics({
+  workflow,
+  selected,
+}: {
+  workflow: {
+    id: string;
+    name: string;
+    status: string;
+    created_at: string;
+  };
+  selected?: boolean;
+}) {
+  // MNT-019: fetch real metrics per workflow instead of forcing zeros.
+  // The list-page WorkflowListItem doesn't include progress/cycle_count
+  // because the GET /api/workflows list endpoint doesn't return them.
+  // We fetch the per-workflow metrics endpoint and merge the result
+  // here so each card displays its own live data.
+  const { data: metrics } = useWorkflowMetrics(workflow.id);
+  return (
+    <WorkflowCard
+      workflow={{
+        ...workflow,
+        progress: metrics?.completed_percent,
+        cycle_count: metrics?.cycle_count,
+        node_count: metrics?.total_nodes,
+        elapsed_seconds: metrics?.elapsed_seconds,
+      }}
+      selected={selected}
+    />
   );
 }
 
@@ -426,15 +459,9 @@ function WorkflowsContent() {
             tabIndex={0}
           >
             {filteredWorkflows.map((workflow, i) => (
-              <WorkflowCard
+              <WorkflowCardWithMetrics
                 key={workflow.id}
-                workflow={{
-                  ...workflow,
-                  progress: 0,
-                  cycle_count: 0,
-                  node_count: 0,
-                  elapsed_seconds: 0,
-                }}
+                workflow={workflow}
                 selected={i === safeIndex}
               />
             ))}
