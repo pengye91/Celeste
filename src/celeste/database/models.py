@@ -76,6 +76,7 @@ class TaskEventType(str, enum.Enum):
     # OPA loop event types
     WORKFLOW_SUBMITTED = "workflow_submitted"
     WORKFLOW_COMPLETED = "workflow_completed"
+    WORKFLOW_FAILED = "workflow_failed"
     OBSERVATION_CAPTURED = "observation_captured"
     PLAN_GENERATED = "plan_generated"
     EVALUATION_RESULT = "evaluation_result"
@@ -266,6 +267,7 @@ class TaskEvent(Base):
 
     __table_args__ = (
         Index("idx_task_events_wf_type", "workflow_id", "event_type"),
+        Index("idx_task_events_correlation", "correlation_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -293,6 +295,13 @@ class TaskEvent(Base):
     )
     sequence_number: Mapped[int | None] = mapped_column(
         Integer,
+        nullable=True,
+        default=None,
+    )
+    # OBS-002: correlation_id groups events emitted within the same OPA cycle
+    # (or other logical causal unit) so the FeatureDetector and audit
+    # consumers can follow causal links across replans and compensations.
+    correlation_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True,
         default=None,
     )
@@ -328,6 +337,7 @@ class WorkflowEvent(Base):
 
     __table_args__ = (
         Index("idx_workflow_events_wf_type", "workflow_id", "event_type"),
+        Index("idx_workflow_events_correlation", "correlation_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -356,6 +366,13 @@ class WorkflowEvent(Base):
     sequence_number: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
+    )
+    # OBS-002: correlation_id groups events emitted within the same OPA cycle
+    # so audit consumers can follow causal links across replans and
+    # compensations without relying on timestamp heuristics.
+    correlation_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True,
+        default=None,
     )
     timestamp: Mapped[datetime] = mapped_column(
         nullable=False,
