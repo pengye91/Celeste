@@ -988,15 +988,15 @@ class TestWorkflowEventRelationship:
         )
 
     def test_multiple_workflow_events_per_workflow(self, session, sample_workflow):
-        for etype in [
+        for i, etype in enumerate([
             TaskEventType.WORKFLOW_SUBMITTED,
             TaskEventType.PLAN_GENERATED,
             TaskEventType.WORKFLOW_COMPLETED,
-        ]:
+        ], start=1):
             event = WorkflowEvent(
                 workflow_id=sample_workflow.id,
                 event_type=etype,
-                sequence_number=1,
+                sequence_number=i,
             )
             session.add(event)
         session.flush()

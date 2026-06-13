@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1,
+    "name": "Amsterdam Hub",
+    "country": "Netherlands",
+    "capacity_doses": 2400000,
+    "qualified": 1
+  },
+  {
+    "id": 2,
+    "name": "Frankfurt Hub",
+    "country": "Germany",
+    "capacity_doses": 1800000,
+    "qualified": 1
+  },
+  {
+    "id": 3,
+    "name": "Paris Hub",
+    "country": "France",
+    "capacity_doses": 1500000,
+    "qualified": 1
+  },
+  {
+    "id": 4,
+    "name": "Lagos Hub",
+    "country": "Nigeria",
+    "capacity_doses": 800000,
+    "qualified": 1
+  },
+  {
+    "id": 5,
+    "name": "Nairobi Hub",
+    "country": "Kenya",
+    "capacity_doses": 600000,
+    "qualified": 1
+  },
+  {
+    "id": 6,
+    "name": "Bangalore Hub",
+    "country": "India",
+    "capacity_doses": 2000000,
+    "qualified": 1
+  }
+]

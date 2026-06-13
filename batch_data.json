@@ -1,0 +1,114 @@
+{
+  "batches": [
+    {
+      "id": 1,
+      "batch_id": "B-1840",
+      "hub_id": 1,
+      "status": "active",
+      "temperature_c": 2.8,
+      "humidity_pct": 45.0,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 2,
+      "batch_id": "B-1841",
+      "hub_id": 1,
+      "status": "active",
+      "temperature_c": 3.1,
+      "humidity_pct": 47.2,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 3,
+      "batch_id": "B-1842",
+      "hub_id": 1,
+      "status": "active",
+      "temperature_c": 2.5,
+      "humidity_pct": 44.1,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 4,
+      "batch_id": "B-1843",
+      "hub_id": 1,
+      "status": "excursion",
+      "temperature_c": 8.5,
+      "humidity_pct": 52.0,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 5,
+      "batch_id": "B-1844",
+      "hub_id": 1,
+      "status": "active",
+      "temperature_c": 2.9,
+      "humidity_pct": 46.0,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 6,
+      "batch_id": "B-1845",
+      "hub_id": 1,
+      "status": "active",
+      "temperature_c": 2.7,
+      "humidity_pct": 44.8,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 7,
+      "batch_id": "B-1846",
+      "hub_id": 1,
+      "status": "quarantine",
+      "temperature_c": 8.2,
+      "humidity_pct": 51.5,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 8,
+      "batch_id": "B-1847",
+      "hub_id": 1,
+      "status": "active",
+      "temperature_c": 8.1,
+      "humidity_pct": 55.0,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 9,
+      "batch_id": "B-1848",
+      "hub_id": 4,
+      "status": "active",
+      "temperature_c": 2.6,
+      "humidity_pct": 43.0,
+      "created_at": "2026-06-02T00:00:00"
+    },
+    {
+      "id": 10,
+      "batch_id": "B-1849",
+      "hub_id": 6,
+      "status": "active",
+      "temperature_c": 2.4,
+      "humidity_pct": 41.0,
+      "created_at": "2026-06-03T00:00:00"
+    },
+    {
+      "id": 11,
+      "batch_id": "B-1850",
+      "hub_id": 2,
+      "status": "active",
+      "temperature_c": 3.0,
+      "humidity_pct": 46.5,
+      "created_at": "2026-06-01T00:00:00"
+    },
+    {
+      "id": 12,
+      "batch_id": "B-1851",
+      "hub_id": 3,
+      "status": "active",
+      "temperature_c": 2.8,
+      "humidity_pct": 44.0,
+      "created_at": "2026-06-02T00:00:00"
+    }
+  ],
+  "shipments": [],
+  "telemetry_log": []
+}

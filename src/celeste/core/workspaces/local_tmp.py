@@ -66,10 +66,18 @@ class LocalTmpWorkspace(BaseWorkspace):
             if isinstance(maybe_argv, list) and all(isinstance(x, str) for x in maybe_argv):
                 argv_list = maybe_argv
 
+        # SEC-001: never invoke /bin/sh. The full argv list is built
+        # from arguments["argv"] if provided (the caller is responsible
+        # for including the executable as argv[0]); otherwise we use
+        # the single ``command`` string as argv[0].
         if argv_list is not None:
-            stream_kwargs = {"argv": argv_list, "cwd": self._workspace_path, "env": env}
+            full_argv = argv_list
+        elif command is not None:
+            full_argv = [command]
         else:
-            stream_kwargs = {"command": command, "cwd": self._workspace_path, "env": env}
+            raise ValueError("execute() requires either command or arguments['argv']")
+
+        stream_kwargs = {"argv": full_argv, "cwd": self._workspace_path, "env": env}
 
         async for event in _stream_subprocess_events(**stream_kwargs):
             yield event

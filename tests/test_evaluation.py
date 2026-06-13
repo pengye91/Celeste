@@ -415,14 +415,17 @@ class TestFeatureDetector:
                 select(Workflow).where(Workflow.name == "multi-ws concurrent")
             )
             workflow = result.scalar_one()
-            # Simulate 3 concurrent workspaces with partial teardown (1 leak)
-            # seq: spawn(1), spawn(2), spawn(3), destroy(2), destroy(3)  -> concurrent_max=3, leaked=1
+            # Simulate 3 concurrent workspaces with partial teardown (1 leak).
+            # Use high sequence numbers to avoid colliding with the
+            # WORKFLOW_SUBMITTED / CYCLE_STARTED / WORKFLOW_COMPLETED
+            # events that _run_workflow already inserted.
+            # seq: spawn(100), spawn(101), spawn(102), destroy(101), destroy(102)  -> concurrent_max=3, leaked=1
             for seq, etype in [
-                (1, TaskEventType.WORKSPACE_SPAWN),
-                (2, TaskEventType.WORKSPACE_SPAWN),
-                (3, TaskEventType.WORKSPACE_SPAWN),
-                (4, TaskEventType.WORKSPACE_DESTROY),
-                (5, TaskEventType.WORKSPACE_DESTROY),
+                (100, TaskEventType.WORKSPACE_SPAWN),
+                (101, TaskEventType.WORKSPACE_SPAWN),
+                (102, TaskEventType.WORKSPACE_SPAWN),
+                (103, TaskEventType.WORKSPACE_DESTROY),
+                (104, TaskEventType.WORKSPACE_DESTROY),
             ]:
                 session.add(
                     WorkflowEvent(
@@ -451,11 +454,13 @@ class TestFeatureDetector:
                 select(Workflow).where(Workflow.name == "multi-ws clean")
             )
             workflow = result.scalar_one()
+            # High sequence numbers to avoid collisions with events
+            # already inserted by _run_workflow.
             for seq, etype in [
-                (1, TaskEventType.WORKSPACE_SPAWN),
-                (2, TaskEventType.WORKSPACE_SPAWN),
-                (3, TaskEventType.WORKSPACE_DESTROY),
-                (4, TaskEventType.WORKSPACE_DESTROY),
+                (100, TaskEventType.WORKSPACE_SPAWN),
+                (101, TaskEventType.WORKSPACE_SPAWN),
+                (102, TaskEventType.WORKSPACE_DESTROY),
+                (103, TaskEventType.WORKSPACE_DESTROY),
             ]:
                 session.add(
                     WorkflowEvent(

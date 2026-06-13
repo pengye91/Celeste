@@ -20,6 +20,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,6 +29,24 @@ import pytest
 from celeste.config.settings import EngineSettings
 from celeste.core.evaluator import EvaluatorDecision
 from celeste.core.exceptions import PlannerTimeoutError
+
+
+@pytest.fixture(autouse=True)
+async def _reset_db_module():
+    """Reset database module state between tests."""
+    import celeste.database.db as db_mod
+
+    db_mod._engine = None
+    db_mod._async_session_factory = None
+    yield
+    if db_mod._engine is not None:
+        try:
+            await db_mod._engine.dispose()
+        except Exception:
+            pass
+    db_mod._engine = None
+    db_mod._async_session_factory = None
+
 from celeste.core.planner import DAGFragment, DAGNode
 from sqlalchemy import select
 
@@ -199,7 +218,7 @@ def test_opa_loop_init_with_settings():
     """OPALoop can be initialized with custom settings."""
     from celeste.core.opa_loop import OPALoop
 
-    settings = EngineSettings(MAX_OPA_CYCLES=50, MAX_LLM_TOKENS=10000)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=50, MAX_LLM_TOKENS=10000)
     loop = OPALoop(
         agent=_StubAgent(),
         planner=_StubPlanner(),
@@ -431,7 +450,7 @@ async def test_opa_loop_max_cycles_exceeded():
     planner = _StubPlanner(fragments=[fragment])
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
 
-    settings = EngineSettings(MAX_OPA_CYCLES=5)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=5)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     result = await loop.run(goal="max cycles test")
 
@@ -451,7 +470,7 @@ async def test_opa_loop_token_budget_exceeded():
     planner = _StubPlanner(fragments=[fragment])
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
 
-    settings = EngineSettings(MAX_OPA_CYCLES=100, MAX_LLM_TOKENS=2000)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=100, MAX_LLM_TOKENS=2000)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     result = await loop.run(goal="token budget test")
 
@@ -478,7 +497,7 @@ async def test_opa_loop_history_truncated():
     planner = _StubPlanner(fragments=fragments)
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 4 + [EvaluatorDecision.DONE])
 
-    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     await loop.run(goal="history truncation test")
 
@@ -501,7 +520,7 @@ async def test_opa_loop_history_summary_present():
     planner = _StubPlanner(fragments=fragments)
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 4 + [EvaluatorDecision.DONE])
 
-    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", OPA_HISTORY_MAX_CYCLES=3, MAX_OPA_CYCLES=10)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     await loop.run(goal="history summary test")
 
@@ -529,7 +548,7 @@ async def test_opa_loop_history_zero_max():
     planner = _StubPlanner(fragments=fragments)
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE] * 2 + [EvaluatorDecision.DONE])
 
-    settings = EngineSettings(OPA_HISTORY_MAX_CYCLES=0, MAX_OPA_CYCLES=10)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", OPA_HISTORY_MAX_CYCLES=0, MAX_OPA_CYCLES=10)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     await loop.run(goal="history zero max test")
 
@@ -837,7 +856,7 @@ async def test_opa_loop_run_overrides_max_cycles():
     planner = _StubPlanner(fragments=[fragment])
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
 
-    settings = EngineSettings(MAX_OPA_CYCLES=100)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=100)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     result = await loop.run(goal="override test", max_cycles=3)
 
@@ -857,7 +876,7 @@ async def test_opa_loop_run_overrides_max_llm_tokens():
     planner = _StubPlanner(fragments=[fragment])
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
 
-    settings = EngineSettings(MAX_OPA_CYCLES=100, MAX_LLM_TOKENS=50000)
+    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=100, MAX_LLM_TOKENS=50000)
     loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
     result = await loop.run(goal="override test", max_llm_tokens=1000, max_cycles=200)
 

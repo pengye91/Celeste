@@ -97,7 +97,7 @@ class MockWorkspace(BaseWorkspace):
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_module():
+async def _reset_db_module():
     """Reset database module state between tests."""
     import celeste.database.db as db_mod
 
@@ -106,8 +106,8 @@ def _reset_db_module():
     yield
     if db_mod._engine is not None:
         try:
-            loop = asyncio.get_running_loop()
-            loop.run_until_complete(db_mod._engine.dispose())
+            
+            await db_mod._engine.dispose()
         except Exception:
             pass
     db_mod._engine = None
@@ -566,8 +566,9 @@ class TestGlobalEvents:
         resp = await client.get("/api/events")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 2
-        # Both should have event_source
+        # 3 events: WORKFLOW_SUBMITTED (OBS-005) + the TaskEvent + the WorkflowEvent
+        assert len(data) == 3
+        # All three should have event_source
         sources = {e["event_source"] for e in data}
         assert sources == {"task", "workflow"}
 

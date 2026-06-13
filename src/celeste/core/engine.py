@@ -396,6 +396,12 @@ class Engine:
                         n.status == TaskNodeStatus.FAILED for n in nodes
                     )
 
+                    # Print node statuses for debugging
+                    logger.debug(
+                        "F016 debug: ready_ids empty, all_done=%s, any_failed=%s, nodes=%s",
+                        all_done, any_failed, [(n.name, n.status) for n in nodes]
+                    )
+
                     if all_done:
                         if any_failed:
                             await self._fail_workflow(workflow_id)
@@ -431,6 +437,7 @@ class Engine:
 
                 # Wait for this batch to complete
                 results = await asyncio.gather(*tasks, return_exceptions=True)
+                logger.debug("F016 debug: gather returned results=%s", results)
 
                 # Check for failures
                 for r in results:

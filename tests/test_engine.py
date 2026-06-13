@@ -55,25 +55,25 @@ SAMPLE_PLAN = DAGPlan(
         DAGNode(
             name="step_a",
             task_type="tool_execution",
-            command="echo hello",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "hello"]},
             dependencies=[],
         ),
         DAGNode(
             name="step_b",
             task_type="tool_execution",
-            command="echo world",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "world"]},
             dependencies=["step_a"],
         ),
         DAGNode(
             name="step_c",
             task_type="tool_execution",
-            command="echo done",
-            arguments={"key": "value"},
+            command="echo",
+            arguments={"argv": ["echo", "done"]},
             dependencies=["step_b"],
-            compensation_command="echo cleanup",
-            compensation_arguments={"action": "undo"},
+            compensation_command="echo",
+            compensation_arguments={"argv": ["echo", "cleanup"]},
         ),
     ],
 )
@@ -85,36 +85,36 @@ PARALLEL_PLAN = DAGPlan(
         DAGNode(
             name="root",
             task_type="tool_execution",
-            command="echo start",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "start"]},
             dependencies=[],
         ),
         DAGNode(
             name="branch_1",
             task_type="tool_execution",
-            command="echo branch1",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "branch1"]},
             dependencies=["root"],
         ),
         DAGNode(
             name="branch_2",
             task_type="tool_execution",
-            command="echo branch2",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "branch2"]},
             dependencies=["root"],
         ),
         DAGNode(
             name="branch_3",
             task_type="tool_execution",
-            command="echo branch3",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "branch3"]},
             dependencies=["root"],
         ),
         DAGNode(
             name="join",
             task_type="tool_execution",
-            command="echo join",
-            arguments={},
+            command="echo",
+            arguments={"argv": ["echo", "join"]},
             dependencies=["branch_1", "branch_2", "branch_3"],
         ),
     ],
@@ -213,7 +213,7 @@ class FailingWorkspace(MockWorkspace):
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_module():
+async def _reset_db_module():
     """Reset database module state between tests."""
     import celeste.database.db as db_mod
 
@@ -223,8 +223,7 @@ def _reset_db_module():
     # Clean up after test
     if db_mod._engine is not None:
         try:
-            loop = asyncio.get_running_loop()
-            loop.run_until_complete(db_mod._engine.dispose())
+            await db_mod._engine.dispose()
         except Exception:
             pass
     db_mod._engine = None
@@ -428,8 +427,8 @@ class TestWorkflowSubmission:
                 assert len(node_c.previous_node_ids) == 1
 
                 # Verify step_c has compensation command
-                assert node_c.compensation_command == "echo cleanup"
-                assert node_c.compensation_arguments == {"action": "undo"}
+                assert node_c.compensation_command == "echo"
+                assert node_c.compensation_arguments == {"argv": ["echo", "cleanup"]}
         finally:
             await engine.stop()
 
@@ -1211,20 +1210,20 @@ class TestSagaCompensation:
                 DAGNode(
                     name="setup",
                     task_type="tool_execution",
-                    command="echo setup",
-                    arguments={},
+                    command="echo",
+                    arguments={"argv": ["echo", "setup"]},
                     dependencies=[],
-                    compensation_command="echo cleanup_setup",
-                    compensation_arguments={"undo": "setup"},
+                    compensation_command="echo",
+                    compensation_arguments={"argv": ["echo", "cleanup_setup"]},
                 ),
                 DAGNode(
                     name="process",
                     task_type="tool_execution",
-                    command="echo process",
-                    arguments={},
+                    command="echo",
+                    arguments={"argv": ["echo", "process"]},
                     dependencies=["setup"],
-                    compensation_command="echo cleanup_process",
-                    compensation_arguments={"undo": "process"},
+                    compensation_command="echo",
+                    compensation_arguments={"argv": ["echo", "cleanup_process"]},
                 ),
                 DAGNode(
                     name="finalize",

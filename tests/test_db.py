@@ -59,7 +59,7 @@ def _make_file_url() -> tuple[str, str]:
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_module():
+async def _reset_db_module():
     """Reset module-level state between tests so engines don't leak."""
     import celeste.database.db as db_mod
 
@@ -72,8 +72,8 @@ def _reset_db_module():
         import asyncio
 
         try:
-            loop = asyncio.get_running_loop()
-            loop.run_until_complete(db_mod._engine.dispose())
+            
+            await db_mod._engine.dispose()
         except Exception:
             pass
     db_mod._engine = None

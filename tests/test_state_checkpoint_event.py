@@ -33,15 +33,15 @@ SQLITE_MEMORY_URL = "sqlite+aiosqlite://"
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_module():
+async def _reset_db_module():
     import celeste.database.db as db_mod
     db_mod._engine = None
     db_mod._async_session_factory = None
     yield
     if db_mod._engine is not None:
         try:
-            loop = asyncio.get_running_loop()
-            loop.run_until_complete(db_mod._engine.dispose())
+            
+            await db_mod._engine.dispose()
         except Exception:
             pass
     db_mod._engine = None

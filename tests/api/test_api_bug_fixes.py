@@ -103,7 +103,7 @@ class MockWorkspace(BaseWorkspace):
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_module():
+async def _reset_db_module():
     """Reset database module state between tests."""
     import celeste.database.db as db_mod
 
@@ -112,8 +112,8 @@ def _reset_db_module():
     yield
     if db_mod._engine is not None:
         try:
-            loop = asyncio.get_running_loop()
-            loop.run_until_complete(db_mod._engine.dispose())
+            
+            await db_mod._engine.dispose()
         except Exception:
             pass
     db_mod._engine = None

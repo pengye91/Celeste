@@ -113,7 +113,7 @@ class MockWorkspace(BaseWorkspace):
 
 
 @pytest.fixture(autouse=True)
-def _reset_db_module():
+async def _reset_db_module():
     """Reset database module state between tests."""
     import celeste.database.db as db_mod
 
@@ -122,8 +122,8 @@ def _reset_db_module():
     yield
     if db_mod._engine is not None:
         try:
-            loop = asyncio.get_running_loop()
-            loop.run_until_complete(db_mod._engine.dispose())
+            
+            await db_mod._engine.dispose()
         except Exception:
             pass
     db_mod._engine = None
@@ -543,6 +543,8 @@ class TestWorkflowEvents:
 
     @pytest.mark.asyncio
     async def test_events_empty_for_new_workflow(self, client):
+        # OBS-005: a workflow now emits a WORKFLOW_SUBMITTED event at
+        # creation, so a "new" workflow has exactly one event.
         create_resp = await client.post("/api/workflows", json=SAMPLE_WORKFLOW_BODY)
         wf_id = create_resp.json()["workflow_id"]
 
@@ -550,7 +552,8 @@ class TestWorkflowEvents:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list)
-        assert len(data) == 0
+        assert len(data) == 1
+        assert data[0]["event_type"] == "workflow_submitted"
 
     @pytest.mark.asyncio
     async def test_events_after_execution(self, client, settings):
