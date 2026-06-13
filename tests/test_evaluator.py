@@ -262,6 +262,63 @@ class TestEvaluatorCache:
 
         assert len(client.complete_calls) == 2
 
+    def test_evaluator_cache_uses_monotonic_clock(self, monkeypatch):
+        """F007: Cache TTL must use time.monotonic() (not time.time()) so that
+        NTP step adjustments do not cause stale entries to persist forever.
+
+        With time.time() (wall-clock), if the clock jumps BACKWARD, expires_at
+        (set to wall_clock + TTL) ends up "in the future" of the new clock, so
+        time.time() > expires_at is False and the entry is never evicted.
+
+        We directly assert that the cache implementation reads
+        ``time.monotonic()`` (not ``time.time()``) when computing TTL.
+        """
+        from celeste.core import evaluator as evaluator_module
+        from celeste.core.evaluator import Evaluator, EvaluatorDecision
+
+        client = _StubLLMClient(response_content="DONE\nGoal achieved.")
+        settings = EngineSettings(EVALUATOR_CACHE_ENABLED=True, EVALUATOR_CACHE_TTL_SECONDS=60)
+        evaluator = Evaluator(client, settings=settings)
+
+        fragment = _MockFragment([{"name": "task1", "status": "completed"}])
+        goal = "Complete the workflow"
+        cache_key = evaluator._make_cache_key(fragment, goal)
+
+        calls = {"time": 0, "monotonic": 0}
+
+        def fake_time() -> float:
+            calls["time"] += 1
+            # Wall clock DOES NOT advance. NTP step simulates no time passing.
+            return 1000.0
+
+        def fake_monotonic() -> float:
+            calls["monotonic"] += 1
+            # Monotonic clock advances past TTL.
+            n = calls["monotonic"]
+            # First call (set): 100.0. Second call (get): 200.0 > 160.0 (TTL).
+            return 100.0 if n == 1 else 200.0
+
+        monkeypatch.setattr(evaluator_module.time, "time", fake_time)
+        monkeypatch.setattr(evaluator_module.time, "monotonic", fake_monotonic)
+
+        evaluator._set_cached(cache_key, EvaluatorDecision.DONE)
+        result = evaluator._get_cached(cache_key)
+
+        # Under correct (monotonic-based) impl: monotonic advances past
+        # expires_at -> entry evicted -> result is None.
+        # Under buggy (time.time()) impl: time is frozen at 1000.0, so
+        # expires_at = 1060.0 and 1000.0 > 1060.0 is False -> entry returned.
+        assert result is None, (
+            "F007: cache TTL must use time.monotonic(), not time.time(); "
+            "monotonic advances past TTL but time.time() does not."
+        )
+        # And the implementation must actually call monotonic() at least once
+        # for each of _set_cached and _get_cached.
+        assert calls["monotonic"] >= 2, (
+            f"F007: expected at least 2 calls to time.monotonic() "
+            f"(one in _set_cached, one in _get_cached), got {calls['monotonic']}"
+        )
+
 
 # ===========================================================================
 # Evaluator prompt structure

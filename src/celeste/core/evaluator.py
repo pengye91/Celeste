@@ -134,7 +134,7 @@ class Evaluator:
         entry = self._cache.get(cache_key)
         if entry is None:
             return None
-        if time.time() > entry.expires_at:
+        if time.monotonic() > entry.expires_at:
             del self._cache[cache_key]
             return None
         return entry.decision
@@ -143,7 +143,7 @@ class Evaluator:
         """Store decision in cache with TTL."""
         if not self._settings.EVALUATOR_CACHE_ENABLED:
             return
-        expires_at = time.time() + self._settings.EVALUATOR_CACHE_TTL_SECONDS
+        expires_at = time.monotonic() + self._settings.EVALUATOR_CACHE_TTL_SECONDS
         self._cache[cache_key] = _CacheEntry(decision=decision, expires_at=expires_at)
 
     @staticmethod
