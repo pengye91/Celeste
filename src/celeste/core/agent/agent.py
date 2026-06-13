@@ -250,6 +250,21 @@ class EnvironmentAgent:
             for tool in toolkit.get_tools():
                 self._tool_routes[tool.name] = (toolkit, tool)
 
+    # -- transport routing ---------------------------------------------------
+
+    def _uses_remote_transport(self) -> bool:
+        """Return True iff tool calls should be routed over the transport.
+
+        A ``None`` transport (raw in-process agent with drivers) and an
+        :class:`InProcessTransport` both execute locally. Any other transport
+        (e.g. :class:`WebSocketTransport`, :class:`StdioTransport`) is remote
+        and tool calls must be forwarded to the server process that owns the
+        drivers and toolkits.
+        """
+        return self._transport is not None and not isinstance(
+            self._transport, InProcessTransport
+        )
+
     # -- factory methods -----------------------------------------------------
 
     @classmethod
@@ -348,12 +363,28 @@ class EnvironmentAgent:
     ) -> dict[str, Any]:
         """Invoke a tool on the agent.
 
-        Security pipeline:
+        When the agent is backed by a remote transport (WebSocket, stdio, ...),
+        the call is forwarded to the server process that owns the drivers and
+        toolkits. Otherwise the call executes locally through the security
+        pipeline and driver/toolkit routing.
+
+        Local security pipeline:
         1. Engine-side SecurityAuditor validates the tool call.
         2. ToolRegistry allowlist check.
         3. Route to built-in or toolkit implementation.
         4. Apply timeout.
         """
+        # Remote transport: forward the request and return the server result.
+        if self._uses_remote_transport():
+            return await self._transport.send_request(
+                "call_tool",
+                {
+                    "name": name,
+                    "arguments": arguments or {},
+                    "timeout_ms": timeout_ms,
+                },
+            )
+
         args = arguments or {}
 
         # 1. Security audit (engine-side)
@@ -388,7 +419,16 @@ class EnvironmentAgent:
         return _normalize_result(result)
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        """Discover available tools (built-in + registered toolkit tools)."""
+        """Discover available tools (built-in + registered toolkit tools).
+
+        When the agent is backed by a remote transport, the tool list is
+        queried from the server (which owns the drivers and any registered
+        toolkits). Otherwise the local built-ins plus this agent's toolkits
+        are returned.
+        """
+        if self._uses_remote_transport():
+            return await self._transport.send_request("list_tools", {})
+
         tools: list[dict[str, Any]] = []
 
         # Built-in tools
@@ -409,9 +449,13 @@ class EnvironmentAgent:
     # -- internal handlers (called by InProcessTransport) --------------------
 
     async def _handle_call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Handle a call_tool request from the transport layer."""
+        """Handle a call_tool request from the transport layer.
+
+        Accepts both the canonical ``arguments`` key (used by remote clients)
+        and the legacy ``args`` key (used by :class:`InProcessTransport`).
+        """
         name = params.get("name", "")
-        args = params.get("args", {})
+        args = params.get("arguments", params.get("args", {}))
         timeout = params.get("timeout_ms")
         return await self.call_tool(name, args, timeout_ms=timeout)
 
