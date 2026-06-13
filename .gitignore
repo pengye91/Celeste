@@ -41,3 +41,4 @@ htmlcov/
 # Project-specific
 celeste.db
 .claude/
+.playwright-mcp/
