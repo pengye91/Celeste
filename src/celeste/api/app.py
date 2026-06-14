@@ -68,23 +68,31 @@ from celeste.toolkits.system_data import SystemDataToolkit
 logger = logging.getLogger(__name__)
 
 
-def _utc_iso(dt: datetime.datetime | None) -> str | None:
-    """Serialize a DB-sourced datetime as a timezone-aware UTC ISO 8601 string.
+def _as_aware_utc(dt: datetime.datetime | None) -> datetime.datetime | None:
+    """Coerce a DB-sourced datetime to a timezone-aware UTC datetime.
 
     SQLite/aiosqlite strips ``tzinfo`` on retrieval, so DB datetimes are naive
-    (UTC value, no offset). Serializing them with bare ``.isoformat()`` yields a
-    string with NO timezone marker, which the frontend ``new Date(iso)`` parses
-    as LOCAL time — producing wrong relative times.
-
-    This helper re-stamps naive datetimes as UTC so ``.isoformat()`` emits a
-    trailing ``+00:00`` offset, while preserving microseconds and passing
-    through already-aware datetimes unchanged.
+    (UTC value, no offset). This re-stamps naive datetimes as UTC while passing
+    through already-aware datetimes unchanged. Returns ``None`` for ``None``.
     """
     if dt is None:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
-    return dt.isoformat()
+    return dt
+
+
+def _utc_iso(dt: datetime.datetime | None) -> str | None:
+    """Serialize a DB-sourced datetime as a timezone-aware UTC ISO 8601 string.
+
+    Serializing naive DB datetimes with bare ``.isoformat()`` yields a string
+    with NO timezone marker, which the frontend ``new Date(iso)`` parses as
+    LOCAL time — producing wrong relative times. This helper delegates to
+    :func:`_as_aware_utc` so the serialized value carries a trailing ``+00:00``
+    offset, while preserving microseconds.
+    """
+    aware = _as_aware_utc(dt)
+    return None if aware is None else aware.isoformat()
 
 _API_VERSION = "0.1.0"
 
@@ -883,12 +891,11 @@ def create_app(
                 (completed_nodes / total_nodes * 100) if total_nodes > 0 else 0.0
             )
 
-            # Elapsed seconds. _utc_iso re-stamps naive (UTC-valued) DB datetimes
-            # as timezone-aware UTC; here we mirror that for arithmetic by
-            # parsing the helper's output back into an aware datetime.
+            # Elapsed seconds. Coerce naive (UTC-valued) DB datetimes to aware
+            # UTC datetimes directly, without a serialize->parse round-trip.
             now = datetime.datetime.now(datetime.timezone.utc)
-            created_at = datetime.datetime.fromisoformat(_utc_iso(wf.created_at))
-            updated_at = datetime.datetime.fromisoformat(_utc_iso(wf.updated_at))
+            created_at = _as_aware_utc(wf.created_at)
+            updated_at = _as_aware_utc(wf.updated_at)
             if wf.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED, WorkflowStatus.ESCALATED):
                 elapsed_seconds = (updated_at - created_at).total_seconds()
             else:
