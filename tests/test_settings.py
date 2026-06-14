@@ -41,8 +41,15 @@ class TestDefaults:
     @pytest.fixture(autouse=True)
     def _isolate_from_project_env(self, monkeypatch: pytest.MonkeyPatch):
         """Construct EngineSettings without consulting the .env file or
-        any pre-existing LLM_* env vars, so the "default" values tested
-        here are the field defaults declared in the model itself."""
+        any pre-existing env vars, so the "default" values tested here are
+        the field defaults declared in the model itself.
+
+        ``env_file=None`` stops the model from reading the project ``.env``,
+        but pydantic-settings still consults ``os.environ`` -- so any env
+        var (e.g. ``MAX_OPA_CYCLES`` exported in the developer shell) would
+        otherwise leak in and shadow the code default. We clear every field
+        name the model reads from the environment.
+        """
         # Stub ``_env_file`` so the model never reads the project .env
         with patch.object(
             EngineSettings, "model_config", new={**EngineSettings.model_config, "env_file": None}
@@ -51,6 +58,16 @@ class TestDefaults:
                 "ENVIRONMENT",
                 "DATABASE_URL",
                 "MAX_PARALLEL_SUBPROCESSES",
+                "MAX_OPA_CYCLES",
+                "MAX_LLM_TOKENS",
+                "OPA_HISTORY_MAX_CYCLES",
+                "SNAPSHOT_TIMEOUT_MS",
+                "PLANNER_TIMEOUT_MS",
+                "WORKFLOW_RETENTION_DAYS",
+                "EVALUATOR_CACHE_ENABLED",
+                "EVALUATOR_CACHE_TTL_SECONDS",
+                "STRICT_SECURITY_MODE",
+                "WORKSPACE_ENGINE",
                 "LLM_PROVIDER",
                 "LLM_MODEL",
                 "LLM_API_KEY",
@@ -74,6 +91,11 @@ class TestDefaults:
     def test_max_opa_cycles_default(self) -> None:
         s = EngineSettings()
         assert s.MAX_OPA_CYCLES == 100
+
+    def test_workflow_retention_days_default(self) -> None:
+        # TODO-19: retention is disabled by default (0 = keep forever).
+        s = EngineSettings()
+        assert s.WORKFLOW_RETENTION_DAYS == 0
 
     def test_max_llm_tokens_default(self) -> None:
         s = EngineSettings()

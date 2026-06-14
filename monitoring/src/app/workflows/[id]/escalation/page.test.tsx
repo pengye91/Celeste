@@ -521,9 +521,8 @@ describe("EscalationPage", () => {
       submittedAt: 0,
     } as never);
 
-    let result: ReturnType<typeof render> | undefined;
     await act(async () => {
-      result = render(
+      render(
         <QueryClientProvider client={queryClient}>
           <EscalationPage params={Promise.resolve({ id: "wf-123" })} />
         </QueryClientProvider>
@@ -628,9 +627,8 @@ describe("EscalationPage", () => {
       submittedAt: 0,
     } as never);
 
-    let result: ReturnType<typeof render> | undefined;
     await act(async () => {
-      result = render(
+      render(
         <QueryClientProvider client={queryClient}>
           <EscalationPage params={Promise.resolve({ id: "wf-123" })} />
         </QueryClientProvider>
@@ -745,9 +743,8 @@ describe("EscalationPage", () => {
       submittedAt: 0,
     } as never);
 
-    let result: ReturnType<typeof render> | undefined;
     await act(async () => {
-      result = render(
+      render(
         <QueryClientProvider client={queryClient}>
           <EscalationPage params={Promise.resolve({ id: "wf-123" })} />
         </QueryClientProvider>

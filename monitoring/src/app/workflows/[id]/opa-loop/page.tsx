@@ -8,7 +8,7 @@ import {
   useWorkflow,
   useWorkflowMetrics,
 } from "@/hooks/useWorkflow";
-import { useWorkflowEvents, useWorkflowWorkflowEvents } from "@/hooks/useWorkflowEvents";
+import { useWorkflowWorkflowEvents } from "@/hooks/useWorkflowEvents";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { formatTimestamp, formatDuration } from "@/lib/format";
 import { statusOrbVariant, statusBadgeVariant } from "@/lib/workflowStatus";

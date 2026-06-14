@@ -7,7 +7,6 @@ import { StatusOrb } from "@/components/ui/status-orb";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useWorkflows, useWorkflowMetrics } from "@/hooks/useWorkflow";
-import type { WorkflowMetrics } from "@/lib/types";
 import { useUrlState } from "@/hooks/useUrlState";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { formatRelativeTime } from "@/lib/format";
