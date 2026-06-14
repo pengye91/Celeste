@@ -439,44 +439,17 @@ async def test_opa_loop_tier3_full_replan():
 # ===========================================================================
 
 
-@pytest.mark.asyncio
-async def test_opa_loop_max_cycles_exceeded():
-    """Exceeding MAX_OPA_CYCLES returns escalated WorkflowResult."""
-    from celeste.core.opa_loop import OPALoop, WorkflowResult
-
-    agent = _StubAgent(snapshot_result={"files": {}})
-    fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
-    # Always return CONTINUE to keep cycling
-    planner = _StubPlanner(fragments=[fragment])
-    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
-
-    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=5)
-    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
-    result = await loop.run(goal="max cycles test")
-
-    assert isinstance(result, WorkflowResult)
-    assert result.status == "escalated"
-    assert result.reason == "max_cycles_exceeded"
-    assert result.cycle_count == 5
-
-
-@pytest.mark.asyncio
-async def test_opa_loop_token_budget_exceeded():
-    """Exceeding MAX_LLM_TOKENS returns escalated WorkflowResult."""
-    from celeste.core.opa_loop import OPALoop, WorkflowResult
-
-    agent = _StubAgent(snapshot_result={"files": {}})
-    fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
-    planner = _StubPlanner(fragments=[fragment])
-    evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
-
-    settings = EngineSettings(DATABASE_URL="sqlite+aiosqlite:///:memory:", MAX_OPA_CYCLES=100, MAX_LLM_TOKENS=2000)
-    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
-    result = await loop.run(goal="token budget test")
-
-    assert isinstance(result, WorkflowResult)
-    assert result.status == "escalated"
-    assert result.reason == "token_budget_exceeded"
+# ===========================================================================
+# Safety limits
+# ===========================================================================
+#
+# NOTE: the max_cycles / token_budget escalation tests live further below as
+# test_opa_loop_max_cycles_exceeded_persists_escalated and
+# test_opa_loop_token_budget_exceeded_persists_escalated — those are the
+# DB-asserting versions (they verify the persisted status is ESCALATED, not
+# just the in-memory result.status). Earlier in-memory-only duplicates were
+# removed because Python module-level redefinition left only one definition
+# collected per name, so the DB-asserting coverage never actually ran.
 
 
 # ===========================================================================
@@ -1052,7 +1025,7 @@ async def test_opa_loop_compensates_on_failure():
 
 
 @pytest.mark.asyncio
-async def test_opa_loop_max_cycles_exceeded():
+async def test_opa_loop_max_cycles_exceeded_persists_escalated():
     """Exceeding MAX_OPA_CYCLES returns escalated WorkflowResult and persists a workflow record."""
     from celeste.core.opa_loop import OPALoop, WorkflowResult
     from celeste.database.db import close_db, get_session, init_db
@@ -1089,7 +1062,7 @@ async def test_opa_loop_max_cycles_exceeded():
 
 
 @pytest.mark.asyncio
-async def test_opa_loop_token_budget_exceeded():
+async def test_opa_loop_token_budget_exceeded_persists_escalated():
     """Exceeding MAX_LLM_TOKENS returns escalated WorkflowResult and persists a workflow record."""
     from celeste.core.opa_loop import OPALoop, WorkflowResult
     from celeste.database.db import close_db, get_session, init_db

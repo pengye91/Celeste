@@ -1283,6 +1283,7 @@ def create_app(
                     WorkflowStatus.COMPLETED,
                     WorkflowStatus.FAILED,
                     WorkflowStatus.CANCELLED,
+                    WorkflowStatus.ESCALATED,
                 ):
                     wf.status = WorkflowStatus.FAILED
                     await session.commit()
