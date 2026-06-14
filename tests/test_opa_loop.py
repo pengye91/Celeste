@@ -846,6 +846,13 @@ async def test_opa_loop_run_overrides_max_llm_tokens():
 
     agent = _StubAgent(snapshot_result={"files": {}})
     fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+    # TODO-18: stamp realistic planner usage so the token budget trips on
+    # harvested usage (1001 > 1000) rather than the removed += 100 heuristic.
+    setattr(
+        fragment,
+        "_usage",
+        {"prompt_tokens": 500, "completion_tokens": 501, "total_tokens": 1001},
+    )
     planner = _StubPlanner(fragments=[fragment])
     evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
 
@@ -1078,6 +1085,13 @@ async def test_opa_loop_token_budget_exceeded_persists_escalated():
     try:
         agent = _StubAgent(snapshot_result={"files": {}})
         fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        # TODO-18: stamp planner usage exceeding MAX_LLM_TOKENS (1001 > 1000)
+        # so the budget trips on harvested usage, not the removed heuristic.
+        setattr(
+            fragment,
+            "_usage",
+            {"prompt_tokens": 500, "completion_tokens": 501, "total_tokens": 1001},
+        )
         planner = _StubPlanner(fragments=[fragment])
         evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
 

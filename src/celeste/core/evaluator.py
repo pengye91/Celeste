@@ -63,6 +63,31 @@ class EvaluatorDecision(metaclass=_EvaluatorDecisionMeta):
     def __repr__(self) -> str:
         return f"EvaluatorDecision.{self.name}(reason={self.reason!r})"
 
+    def _clone(self) -> "EvaluatorDecision":
+        """Return a fresh instance with the same name.
+
+        The four canonical decisions (DONE/REPLAN/ESCALATE/CONTINUE) are
+        process-global singletons used for ``==`` comparison throughout the
+        codebase. ``__eq__`` compares by ``.name``, so a clone with the same
+        name is interchangeable for all comparison purposes -- but it is a
+        distinct object, so attaching per-call metadata (``usage``,
+        ``finish_reason``, ``model``) does not mutate the shared singletons.
+
+        Without this, a prior workflow's evaluator usage leaked onto the
+        DONE singleton and bled into the next workflow's token accounting
+        (TODO-18). Cloning at the point of metadata attachment keeps the
+        singletons pristine.
+        """
+        clone = EvaluatorDecision.__new__(EvaluatorDecision)
+        clone.name = self.name
+        clone.reason = self.reason
+        # Copy any per-call metadata already present so the clone is a
+        # faithful snapshot, then the caller overwrites what it needs.
+        clone.usage = dict(getattr(self, "usage", {})) if hasattr(self, "usage") else {}
+        clone.finish_reason = getattr(self, "finish_reason", None)
+        clone.model = getattr(self, "model", None)
+        return clone
+
 
 # Create singleton instances
 EvaluatorDecision.DONE = EvaluatorDecision("DONE")
@@ -209,6 +234,13 @@ class Evaluator:
         # OBS-022: Surface LLMResponse metadata on the decision so OPALoop can
         # accumulate evaluator token usage and detect truncated evaluations.
         # Mirrors the planner's `fragment._usage` convention.
+        #
+        # Clone the singleton before attaching per-call metadata (TODO-18):
+        # the canonical DONE/REPLAN/ESCALATE/CONTINUE singletons are shared
+        # process-globals. Mutating them here would leak usage from one
+        # workflow into the next. The clone compares equal by ``.name`` but
+        # is a distinct object.
+        decision = decision._clone()
         decision.usage = dict(response.usage) if response.usage else {}
         decision.finish_reason = response.finish_reason
         decision.model = response.model

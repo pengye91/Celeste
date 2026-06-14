@@ -358,6 +358,7 @@ class OPALoop:
         goal: str,
         max_cycles: int | None = None,
         max_llm_tokens: int | None = None,
+        max_llm_cost_usd: float | None = None,
     ) -> WorkflowResult:
         """Run the OPA loop until the goal is achieved or limits are hit.
 
@@ -365,12 +366,20 @@ class OPALoop:
             goal: The high-level workflow goal.
             max_cycles: Override for MAX_OPA_CYCLES.
             max_llm_tokens: Override for MAX_LLM_TOKENS.
+            max_llm_cost_usd: Override for MAX_LLM_COST_USD (TODO-6). When
+                the running token-cost estimate crosses this, the workflow
+                escalates to a human. ``None`` falls back to the setting
+                (which defaults to 5.0; set to 0 to disable).
 
         Returns:
             WorkflowResult with final status, reason, and metrics.
         """
         max_cycles = max_cycles or self._settings.MAX_OPA_CYCLES
         max_llm_tokens = max_llm_tokens or self._settings.MAX_LLM_TOKENS
+        # TODO-6: resolve the cost budget override (None falls back to the
+        # setting). ``max_llm_cost_usd=0`` is the explicit "disable" sentinel.
+        if max_llm_cost_usd is None:
+            max_llm_cost_usd = self._settings.MAX_LLM_COST_USD
 
         cycle_count = 0
         llm_tokens_accumulated = 0
@@ -387,7 +396,11 @@ class OPALoop:
         failed_node_names: set[str] = set()
 
         while True:
-            # -- Safety limits ------------------------------------------------
+            # -- Safety limit: cycle count -----------------------------------
+            # The token/cost budgets are enforced *after* the plan and
+            # evaluate LLM calls (see _check_token_budgets), once real usage
+            # has been harvested. TODO-18 removed the per-cycle += 100
+            # heuristic in favour of actual provider usage metadata.
             cycle_count += 1
             if cycle_count > max_cycles:
                 await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
@@ -395,18 +408,6 @@ class OPALoop:
                     status="escalated",
                     reason="max_cycles_exceeded",
                     cycle_count=cycle_count - 1,
-                    llm_tokens_accumulated=llm_tokens_accumulated,
-                    workflow_id=workflow_id,
-                )
-            # Heuristic: each OPA cycle consumes some tokens (observation + plan + evaluate)
-            # In production this would come from actual LLM usage metadata
-            llm_tokens_accumulated += 100
-            if llm_tokens_accumulated >= max_llm_tokens:
-                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
-                return WorkflowResult(
-                    status="escalated",
-                    reason="token_budget_exceeded",
-                    cycle_count=cycle_count,
                     llm_tokens_accumulated=llm_tokens_accumulated,
                     workflow_id=workflow_id,
                 )
@@ -484,6 +485,20 @@ class OPALoop:
                     workflow_id, llm_tokens_accumulated
                 )
 
+            # Enforce token/cost budgets after the planner LLM call has been
+            # accounted for. Returns an escalation WorkflowResult if a budget
+            # is crossed, otherwise None.
+            budget_result = self._check_token_budgets(
+                workflow_id,
+                cycle_count,
+                llm_tokens_accumulated,
+                max_llm_tokens,
+                max_llm_cost_usd,
+            )
+            if budget_result is not None:
+                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
+                return budget_result
+
             seq += 1
             await self._emit_workflow_event(
                 workflow_id,
@@ -534,6 +549,28 @@ class OPALoop:
             # -- 4. EVALUATE --------------------------------------------------
             decision = await self._evaluator.evaluate(fragment, goal)
 
+            # Harvest evaluator LLM usage (stashed on the decision by
+            # Evaluator.evaluate, mirroring the planner's fragment._usage
+            # convention). TODO-18: evaluator calls are real LLM invocations
+            # and must be counted toward the token/cost budgets.
+            decision_usage = getattr(decision, "usage", None) or {}
+            decision_tokens = int(decision_usage.get("total_tokens") or 0)
+            if decision_tokens > 0:
+                llm_tokens_accumulated += decision_tokens
+                await self._update_workflow_tokens(
+                    workflow_id, llm_tokens_accumulated
+                )
+                budget_result = self._check_token_budgets(
+                    workflow_id,
+                    cycle_count,
+                    llm_tokens_accumulated,
+                    max_llm_tokens,
+                    max_llm_cost_usd,
+                )
+                if budget_result is not None:
+                    await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
+                    return budget_result
+
             seq += 1
             await self._emit_workflow_event(
                 workflow_id,
@@ -542,6 +579,7 @@ class OPALoop:
                     "cycle": cycle_count,
                     "decision": decision.name if hasattr(decision, "name") else str(decision),
                     "reason": getattr(decision, "reason", ""),
+                    "tokens": llm_tokens_accumulated,
                 },
                 seq,
             )
@@ -665,6 +703,62 @@ class OPALoop:
             if workflow is not None:
                 workflow.llm_tokens_accumulated = llm_tokens_accumulated
 
+    def _estimate_cost_usd(self, llm_tokens: int) -> float:
+        """Estimate a USD cost from the running token count.
+
+        Uses ``MAX_LLM_COST_USD_PER_1K_TOKENS`` from settings. This is an
+        upper-bound guard for the OPA-loop cost budget, not an invoice --
+        real billing comes from provider usage metadata persisted on the
+        LLMResponse, which now feeds ``llm_tokens_accumulated`` directly
+        (see TODO-18).
+        """
+        per_1k = self._settings.MAX_LLM_COST_USD_PER_1K_TOKENS
+        return (llm_tokens / 1000.0) * per_1k
+
+    def _check_token_budgets(
+        self,
+        workflow_id: uuid.UUID,
+        cycle_count: int,
+        llm_tokens_accumulated: int,
+        max_llm_tokens: int,
+        max_llm_cost_usd: float,
+    ) -> WorkflowResult | None:
+        """Enforce the token and USD cost budgets after real LLM usage is known.
+
+        Called once after the planner LLM call and again after the evaluator
+        LLM call in each cycle, so both invocations are accounted for before
+        the loop decides whether to escalate (TODO-18).
+
+        Returns an escalation ``WorkflowResult`` (and flips the workflow to
+        ESCALATED on the DB side via the caller) if a budget is crossed, or
+        ``None`` to let the cycle continue. The caller is responsible for
+        persisting the ESCALATED status; this helper keeps the side-effect
+        surface small and mirrors the pre-TODO-18 control flow.
+        """
+        if llm_tokens_accumulated >= max_llm_tokens:
+            return WorkflowResult(
+                status="escalated",
+                reason="token_budget_exceeded",
+                cycle_count=cycle_count,
+                llm_tokens_accumulated=llm_tokens_accumulated,
+                workflow_id=workflow_id,
+            )
+        # USD cost budget. Escalate to a human when the running estimate
+        # crosses the ceiling. The estimate is derived from the token count,
+        # so this is an upper-bound guard against a runaway planner, not a
+        # billing guarantee. A budget of 0 disables it.
+        if max_llm_cost_usd > 0:
+            cost_estimate = self._estimate_cost_usd(llm_tokens_accumulated)
+            if cost_estimate >= max_llm_cost_usd:
+                return WorkflowResult(
+                    status="escalated",
+                    reason="cost_budget_exceeded",
+                    cycle_count=cycle_count,
+                    llm_tokens_accumulated=llm_tokens_accumulated,
+                    workflow_id=workflow_id,
+                )
+        return None
+
     async def _emit_workflow_event(
         self,
         workflow_id: uuid.UUID,
@@ -731,10 +825,21 @@ class OPALoop:
             workflow = result.scalar_one_or_none()
             if workflow is None:
                 raise ValueError(f"Workflow {workflow_id} not found")
-            # F011: align with Engine.resume_workflow. Only PAUSED workflows
-            # can be resumed. RUNNING workflows that have no _opa_state are
-            # orphans from a crash and must NOT be silently re-initialized.
-            if workflow.status != WorkflowStatus.PAUSED:
+            # F011: only resumable workflows can be resumed. A PAUSED workflow
+            # is the normal resume entry point. A RUNNING workflow is also
+            # accepted here because Engine.resume_workflow() atomically claims
+            # a PAUSED workflow by flipping it to RUNNING *before* delegating
+            # to this method -- so RUNNING-with-_opa_state means "already
+            # claimed by the engine, continue". Any other status (or RUNNING
+            # without _opa_state, an orphan from a crash) is rejected.
+            opa_state_present = (
+                bool(workflow.dag_definition)
+                and "_opa_state" in (workflow.dag_definition or {})
+            )
+            resumable = workflow.status == WorkflowStatus.PAUSED or (
+                workflow.status == WorkflowStatus.RUNNING and opa_state_present
+            )
+            if not resumable:
                 raise ValueError(
                     f"Workflow {workflow_id} is not paused (status={workflow.status.value})"
                 )
@@ -779,6 +884,9 @@ class OPALoop:
         # Inject human input as an artificial observation and continue looping.
         max_cycles = self._settings.MAX_OPA_CYCLES
         max_llm_tokens = self._settings.MAX_LLM_TOKENS
+        # TODO-6: the cost budget is honored on resume too, so a workflow
+        # cannot escape its budget by being paused + resumed repeatedly.
+        max_llm_cost_usd = self._settings.MAX_LLM_COST_USD
 
         # We don't have an agent here in the Engine.resume_workflow path,
         # so resume requires agent/planner/evaluator to be set on the loop.
@@ -786,6 +894,9 @@ class OPALoop:
             raise ValueError("Agent, planner, and evaluator are required to resume a workflow")
 
         while True:
+            # Cycle-count guard only at the top; token/cost budgets are
+            # enforced after real usage is harvested from the planner and
+            # evaluator LLM calls (TODO-18).
             cycle_count += 1
             if cycle_count > max_cycles:
                 await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
@@ -793,17 +904,6 @@ class OPALoop:
                     status="escalated",
                     reason="max_cycles_exceeded",
                     cycle_count=cycle_count - 1,
-                    llm_tokens_accumulated=llm_tokens_accumulated,
-                    workflow_id=workflow_id,
-                )
-
-            llm_tokens_accumulated += 100
-            if llm_tokens_accumulated >= max_llm_tokens:
-                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
-                return WorkflowResult(
-                    status="escalated",
-                    reason="token_budget_exceeded",
-                    cycle_count=cycle_count,
                     llm_tokens_accumulated=llm_tokens_accumulated,
                     workflow_id=workflow_id,
                 )
@@ -884,6 +984,18 @@ class OPALoop:
                     workflow_id, llm_tokens_accumulated
                 )
 
+            # Enforce token/cost budgets after the planner LLM call.
+            budget_result = self._check_token_budgets(
+                workflow_id,
+                cycle_count,
+                llm_tokens_accumulated,
+                max_llm_tokens,
+                max_llm_cost_usd,
+            )
+            if budget_result is not None:
+                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
+                return budget_result
+
             seq += 1
             await self._emit_workflow_event(
                 workflow_id,
@@ -929,6 +1041,25 @@ class OPALoop:
 
             decision = await self._evaluator.evaluate(fragment, workflow.name)
 
+            # Harvest evaluator LLM usage (TODO-18). Mirrors the run() path.
+            decision_usage = getattr(decision, "usage", None) or {}
+            decision_tokens = int(decision_usage.get("total_tokens") or 0)
+            if decision_tokens > 0:
+                llm_tokens_accumulated += decision_tokens
+                await self._update_workflow_tokens(
+                    workflow_id, llm_tokens_accumulated
+                )
+                budget_result = self._check_token_budgets(
+                    workflow_id,
+                    cycle_count,
+                    llm_tokens_accumulated,
+                    max_llm_tokens,
+                    max_llm_cost_usd,
+                )
+                if budget_result is not None:
+                    await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
+                    return budget_result
+
             seq += 1
             await self._emit_workflow_event(
                 workflow_id,
@@ -937,6 +1068,7 @@ class OPALoop:
                     "cycle": cycle_count,
                     "decision": decision.name if hasattr(decision, "name") else str(decision),
                     "reason": getattr(decision, "reason", ""),
+                    "tokens": llm_tokens_accumulated,
                 },
                 seq,
             )

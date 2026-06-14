@@ -49,6 +49,13 @@ class EngineSettings(BaseSettings):
     PLANNER_MAX_RETRIES: int = 2
     MAX_OPA_CYCLES: int = 100
     MAX_LLM_TOKENS: int = 50000
+    # TODO-6: per-workflow USD cost ceiling. Estimated from the token count
+    # via MAX_LLM_COST_USD_PER_1K_TOKENS, so this is an *upper-bound* guard
+    # against a runaway planner burning tokens -- not an invoice. When the
+    # running estimate crosses it the workflow escalates to a human (Tier 4)
+    # rather than aborting. 0.0 disables the budget check entirely.
+    MAX_LLM_COST_USD: float = 5.0
+    MAX_LLM_COST_USD_PER_1K_TOKENS: float = 0.03
     OPA_HISTORY_MAX_CYCLES: int = 5
     EVALUATOR_CACHE_ENABLED: bool = True
     EVALUATOR_CACHE_TTL_SECONDS: int = 3600
@@ -74,6 +81,20 @@ class EngineSettings(BaseSettings):
             raise ValueError("MAX_LLM_TOKENS must be >= 1000")
         return v
 
+    @field_validator("MAX_LLM_COST_USD")
+    @classmethod
+    def _validate_max_llm_cost_usd(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("MAX_LLM_COST_USD must be >= 0")
+        return v
+
+    @field_validator("MAX_LLM_COST_USD_PER_1K_TOKENS")
+    @classmethod
+    def _validate_max_llm_cost_usd_per_1k(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("MAX_LLM_COST_USD_PER_1K_TOKENS must be > 0")
+        return v
+
     @field_validator("OPA_HISTORY_MAX_CYCLES")
     @classmethod
     def _validate_opa_history_max_cycles(cls, v: int) -> int:
@@ -89,6 +110,22 @@ class EngineSettings(BaseSettings):
         return v
 
     STRICT_SECURITY_MODE: bool = True
+
+    # --- Workflow retention (TODO-19) ---
+    # Workflows older than this many days in a terminal state (completed,
+    # failed, cancelled, escalated) are eligible for cleanup. 0 disables
+    # retention entirely (workflows are kept forever). Non-terminal workflows
+    # (pending/running/paused) are NEVER deleted, and terminal workflows that
+    # still have a child run (checkpoint lineage, TODO-20) are preserved so
+    # operators never lose a "continued as" chain mid-history.
+    WORKFLOW_RETENTION_DAYS: int = 0
+
+    @field_validator("WORKFLOW_RETENTION_DAYS")
+    @classmethod
+    def _validate_workflow_retention_days(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("WORKFLOW_RETENTION_DAYS must be >= 0")
+        return v
 
     # --- Workspace isolation ---
     WORKSPACE_ENGINE: Literal["local_tmp", "git_worktree", "docker", "firecracker"] = "local_tmp"

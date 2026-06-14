@@ -110,6 +110,30 @@ class _StubEvaluator:
         return self._decision
 
 
+class _UsageAwareStubEvaluator:
+    """Stub evaluator that returns a decision carrying per-call LLM usage.
+
+    Mirrors what the real ``Evaluator.evaluate()`` does after TODO-18: it
+    stamps ``usage`` onto the returned decision so the OPA loop can
+    accumulate evaluator tokens. Critically, it clones the singleton
+    before attaching metadata -- the same discipline the real evaluator
+    now follows to avoid leaking usage across workflows.
+    """
+
+    def __init__(
+        self,
+        decision: EvaluatorDecision | None = None,
+        usage: dict[str, int] | None = None,
+    ) -> None:
+        self._decision = decision or EvaluatorDecision.DONE
+        self._usage = usage or {}
+
+    async def evaluate(self, fragment: Any, goal: str) -> EvaluatorDecision:
+        decision = self._decision._clone()
+        decision.usage = dict(self._usage)
+        return decision
+
+
 @pytest.fixture(autouse=True)
 async def _reset_db():
     """Ensure a fresh in-memory DB for each test."""
@@ -142,8 +166,8 @@ async def test_opa_loop_persists_planner_usage_onto_workflow_row():
     await init_db(settings=settings)
 
     agent = _StubAgent()
-    # usage total = 150. The OPA loop also adds its 100-token-per-cycle
-    # heuristic, so accumulated total must be at least 150.
+    # usage total = 150/cycle. With the heuristic gone (TODO-18), the
+    # accumulated total equals exactly the harvested planner usage.
     planner = _UsageAwareStubPlanner(
         usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
     )
@@ -162,8 +186,8 @@ async def test_opa_loop_persists_planner_usage_onto_workflow_row():
         assert hasattr(wf, "llm_tokens_accumulated"), (
             "Workflow model is missing llm_tokens_accumulated column"
         )
-        assert wf.llm_tokens_accumulated >= 150, (
-            f"Expected Workflow.llm_tokens_accumulated >= 150, got {wf.llm_tokens_accumulated}"
+        assert wf.llm_tokens_accumulated == 150, (
+            f"Expected Workflow.llm_tokens_accumulated == 150, got {wf.llm_tokens_accumulated}"
         )
 
 
@@ -214,6 +238,97 @@ async def test_metrics_endpoint_returns_persisted_token_total():
                 f"metrics returned llm_tokens_accumulated=None, expected {expected}"
             )
             assert data["llm_tokens_accumulated"] == expected
-            assert data["llm_tokens_accumulated"] >= 150
+            assert data["llm_tokens_accumulated"] == 150
     finally:
         await lifespan_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_accumulates_evaluator_usage():
+    """TODO-18: evaluator LLM calls contribute to llm_tokens_accumulated.
+
+    With planner usage of 150 and evaluator usage of 75 in a single
+    completed cycle, the workflow row must hold 225 tokens -- not just the
+    planner's 150. This locks in the evaluator-usage harvest added in
+    TODO-18.
+    """
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=5,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    agent = _StubAgent()
+    planner = _UsageAwareStubPlanner(
+        usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+    )
+    # Evaluator returns DONE (loop runs exactly one cycle) with 75 tokens.
+    evaluator = _UsageAwareStubEvaluator(
+        decision=EvaluatorDecision.DONE,
+        usage={"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75},
+    )
+
+    loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+    result = await loop.run(goal="evaluator usage test")
+
+    assert result.status == "completed"
+    assert result.llm_tokens_accumulated == 225, (
+        f"Expected 150 (planner) + 75 (evaluator) = 225, "
+        f"got {result.llm_tokens_accumulated}"
+    )
+
+    async with get_session() as session:
+        wf = (
+            await session.execute(select(Workflow).where(Workflow.id == result.workflow_id))
+        ).scalar_one()
+        assert wf.llm_tokens_accumulated == 225
+
+
+@pytest.mark.asyncio
+async def test_evaluator_usage_does_not_leak_across_workflows():
+    """TODO-18 regression guard: singleton usage must not leak between runs.
+
+    The canonical EvaluatorDecision singletons are process-global. Before
+    the _clone() fix, attaching ``usage`` to a returned decision mutated
+    the singleton, so a second workflow that returned the same decision
+    inherited the first workflow's usage. This test runs two workflows
+    back-to-back with different evaluator usage and asserts the second
+    workflow's token total reflects only its own usage.
+    """
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=5,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    # First workflow: planner 150 + evaluator 75 = 225.
+    loop1 = OPALoop(
+        agent=_StubAgent(),
+        planner=_UsageAwareStubPlanner(
+            usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
+        ),
+        evaluator=_UsageAwareStubEvaluator(
+            decision=EvaluatorDecision.DONE,
+            usage={"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75},
+        ),
+        settings=settings,
+    )
+    result1 = await loop1.run(goal="first workflow")
+    assert result1.llm_tokens_accumulated == 225
+
+    # Second workflow: planner 200 + evaluator 0 (no usage attached).
+    # If the singleton leaked, the evaluator's stale 75 would inflate this.
+    loop2 = OPALoop(
+        agent=_StubAgent(),
+        planner=_UsageAwareStubPlanner(
+            usage={"prompt_tokens": 150, "completion_tokens": 50, "total_tokens": 200}
+        ),
+        evaluator=_StubEvaluator(decision=EvaluatorDecision.DONE),
+        settings=settings,
+    )
+    result2 = await loop2.run(goal="second workflow")
+    assert result2.llm_tokens_accumulated == 200, (
+        f"Expected 200 (no leaked evaluator usage), got {result2.llm_tokens_accumulated}"
+    )
