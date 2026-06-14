@@ -2,6 +2,38 @@
 
 Captured during /plan-eng-review on 2026-06-11.
 
+## Status legend
+
+- ✅ **Done** — implemented, tested, committed.
+- 🔴 **Open** — actionable; no external blocker.
+- ⏸️ **Blocked** — needs an external resource, API key, or architectural decision.
+
+| TODO | Status | Notes |
+|------|--------|-------|
+| TODO-1  Remote agent Docker + PyPI CI/CD | ✅ Done | `.github/workflows/{ci,release}.yml` build/publish to GHCR + PyPI. |
+| TODO-2  Human-in-the-loop escalation resume | ✅ Done | `POST /api/workflows/{id}/resume` + `Engine.resume_workflow`. |
+| TODO-3  Alembic database migrations | ✅ Done | `src/celeste/migrations/` with async-aware env.py + baseline. |
+| TODO-4  Agent attestation (crypto signing) | ⏸️ Blocked | Needs key-management / Sigstore decision. |
+| TODO-5  Workspace/agent containment model | ⏸️ Blocked | Architectural decision (agent inside vs outside container). |
+| TODO-6  Cycle limit + cost budget | ✅ Done | `MAX_OPA_CYCLES` + `MAX_LLM_COST_USD` (run + resume + /api/runs). |
+| TODO-7  WebSocket remote transport | ✅ Done | `src/celeste/core/agent/transport_ws.py`. |
+| TODO-8  Incremental snapshot w/ mtime cache | ✅ Done | `EnvironmentAgent._builtin_snapshot` + `force_full` / `recursive`. |
+| TODO-9  Evaluator decision cache | ✅ Done | `EVALUATOR_CACHE_ENABLED` / `EVALUATOR_CACHE_TTL_SECONDS`. |
+| TODO-10 BaseToolkit execute via driver | ✅ Done | `BaseDriver` ABC + `BaseToolkit.execute(name, args, driver)`. |
+| TODO-11 M&A Due Diligence example | ⏸️ Blocked | 9-service demo; ~2-4h runtime, ~$4.50 LLM cost. |
+| TODO-12 Urban Infrastructure example | ⏸️ Blocked | GIS/PostGIS + hydrology sim; complex seed data. |
+| TODO-13 OPA loop history memory leak | ✅ Done | `_maybe_summarize_history` keeps last N + condensed summary. |
+| TODO-14 Model-agnosticism verification | ⏸️ Blocked | Needs 2 LLM API keys + ~$6 to run pharma twice. |
+| TODO-15 CMC visual mockups | ⏸️ Blocked | Needs OpenAI image-gen key. |
+| TODO-16 SVG empty-state illustrations | ⏸️ Blocked | Design-track; depends on TODO-15 direction. |
+| TODO-17 Post-implementation design review | ⏸️ Blocked | Needs working build + browser + TODO-15 mockups. |
+| TODO-18 Real LLM token tracking | ✅ Done | Heuristic `+= 100` removed; real planner + evaluator usage harvested. Also fixed an `EvaluatorDecision` singleton usage-leak. |
+| TODO-19 Workflow retention + cleanup | ✅ Done | `WORKFLOW_RETENTION_DAYS` + background sweep + `/api/admin/retention/cleanup`. |
+| TODO-20 Checkpoint lineage | ✅ Done | `parent_workflow_id` FK + relationships + API exposure. |
+| TODO-21 Monitoring app CI/CD | ✅ Done | `.github/workflows/monitoring.yml` + `monitoring/Dockerfile`. |
+
+**Summary:** 14 done, 7 blocked (all need external resources or decisions).
+
 ---
 
 ## TODO-1: Add CI/CD pipeline for remote agent Docker image
