@@ -70,6 +70,9 @@ class Engine:
         self._event_queue: asyncio.Queue[WorkspaceEvent] = asyncio.Queue()
         # Track active asyncio tasks for graceful cancellation
         self._active_tasks: set[asyncio.Task] = set()
+        # TODO-19: background retention sweep task. None when retention is
+        # disabled (WORKFLOW_RETENTION_DAYS <= 0) or the engine is stopped.
+        self._retention_task: asyncio.Task | None = None
 
     def set_security_auditor(self, auditor: SecurityAuditor | None) -> None:
         """Inject a SecurityAuditor (SEC-002 / SEC-007).
@@ -99,6 +102,66 @@ class Engine:
             )
 
     # ------------------------------------------------------------------
+    # TODO-19: Workflow retention sweep
+    # ------------------------------------------------------------------
+
+    # How often the background sweep wakes up. Conservative: twice a day is
+    # plenty for a retention policy whose resolution is in days.
+    _RETENTION_SWEEP_INTERVAL_SECONDS: int = 12 * 60 * 60
+
+    def _start_retention_loop(self) -> None:
+        """Launch the background retention sweep (no-op when disabled)."""
+        if self._retention_task is not None:
+            return
+        if self._settings.WORKFLOW_RETENTION_DAYS <= 0:
+            return  # retention disabled
+        self._retention_task = asyncio.create_task(self._retention_loop())
+
+    async def _stop_retention_loop(self) -> None:
+        """Cancel the background retention sweep and await its teardown.
+
+        Awaiting (rather than fire-and-forget cancel) is critical: the sweep
+        holds an open DB session, and ``Engine.stop()`` closes the database
+        immediately after this returns. A pending sweep would then hit a
+        closed connection and log noisy errors during shutdown.
+        """
+        task = self._retention_task
+        self._retention_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 -- best-effort teardown
+            logger.debug("Retention sweep task raised during shutdown", exc_info=True)
+
+    async def _retention_loop(self) -> None:
+        """Periodically delete old terminal workflows per the retention policy.
+
+        The loop swallows exceptions so a transient DB error never tears down
+        the whole engine; each tick is independent.
+        """
+        # Local import keeps the module importable even if the retention
+        # module has not been wired yet (it is only used at runtime).
+        from celeste.database.retention import cleanup_old_workflows
+
+        # Run once shortly after start so a freshly-booted engine cleans up a
+        # backlog quickly, then settle into the long interval.
+        while self._running:
+            try:
+                await cleanup_old_workflows(self._settings)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 -- a sweep failure must not kill the engine
+                logger.exception("Workflow retention sweep failed; will retry")
+            try:
+                await asyncio.sleep(self._RETENTION_SWEEP_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                raise
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -117,6 +180,7 @@ class Engine:
         self._semaphore = asyncio.Semaphore(self._settings.MAX_PARALLEL_SUBPROCESSES)
         await self._replay_state()
         self._running = True
+        self._start_retention_loop()
         logger.info("Engine started (max_parallel=%d)", self._settings.MAX_PARALLEL_SUBPROCESSES)
 
     async def stop(self) -> None:
@@ -127,6 +191,11 @@ class Engine:
         """
         if not self._running and not self._active_tasks:
             return
+
+        # TODO-19: stop the retention sweep loop first so it cannot race
+        # with the engine teardown below (it would otherwise try to use the
+        # DB session we are about to close).
+        await self._stop_retention_loop()
 
         # Cancel active tasks
         for task in list(self._active_tasks):
@@ -1065,6 +1134,10 @@ class Engine:
                 description=old_workflow.description,
                 status=WorkflowStatus.PENDING,
                 dag_definition=new_dag_def,
+                # TODO-20: lineage. The new run was continued from the old one
+                # so operators can trace "continued as" chains and the
+                # retention policy can collapse checkpoint lineages together.
+                parent_workflow_id=workflow_id,
             )
             session.add(new_workflow)
 

@@ -158,6 +158,16 @@ class Workflow(Base):
         nullable=False,
         default=0,
     )
+    # TODO-20: Checkpoint lineage. When the CheckpointManager creates a new
+    # workflow run via Continue-As-New (the event threshold is hit), it sets
+    # parent_workflow_id to the previous run so operators can trace
+    # "continued as" chains. Nullable: top-level workflows have no parent.
+    parent_workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workflows.id"),
+        nullable=True,
+        index=True,
+        default=None,
+    )
 
     # Relationships
     task_nodes: Mapped[list["TaskNode"]] = relationship(
@@ -171,6 +181,21 @@ class Workflow(Base):
     workflow_events: Mapped[list["WorkflowEvent"]] = relationship(
         back_populates="workflow",
         cascade="all, delete-orphan",
+    )
+    # TODO-20: self-referential lineage. ``parent`` is the previous run this
+    # one was continued from; ``children`` are runs continued from this one.
+    # remote_side=[id] makes the FK side "remote" so join condition resolves
+    # parent_workflow_id -> id correctly.
+    parent: Mapped["Workflow | None"] = relationship(
+        "Workflow",
+        remote_side=[id],
+        foreign_keys=[parent_workflow_id],
+        back_populates="children",
+    )
+    children: Mapped[list["Workflow"]] = relationship(
+        "Workflow",
+        back_populates="parent",
+        foreign_keys=[parent_workflow_id],
     )
 
     def __repr__(self) -> str:
