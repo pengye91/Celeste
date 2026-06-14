@@ -578,6 +578,7 @@ def create_app(
                         WorkflowStatus.COMPLETED,
                         WorkflowStatus.FAILED,
                         WorkflowStatus.CANCELLED,
+                        WorkflowStatus.ESCALATED,
                     ):
                         workflow.status = WorkflowStatus.FAILED
 
@@ -871,7 +872,7 @@ def create_app(
             updated_at = wf.updated_at
             if updated_at.tzinfo is None:
                 updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
-            if wf.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED):
+            if wf.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED, WorkflowStatus.ESCALATED):
                 elapsed_seconds = (updated_at - created_at).total_seconds()
             else:
                 elapsed_seconds = (now - created_at).total_seconds()

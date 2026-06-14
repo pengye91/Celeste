@@ -60,6 +60,12 @@ class WorkflowStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # Terminal state for workflows that exhausted a safety limit (MAX_OPA_CYCLES,
+    # MAX_LLM_TOKENS, or planner_timeout on the first cycle) and were escalated
+    # rather than paused for human input. Distinct from PAUSED (resumable) and
+    # FAILED (node-level failure): escalation is an out-of-band terminal state
+    # so Engine.start() state replay (which only recovers RUNNING rows) skips it.
+    ESCALATED = "escalated"
 
 
 class TaskEventType(str, enum.Enum):

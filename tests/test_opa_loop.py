@@ -1083,7 +1083,7 @@ async def test_opa_loop_max_cycles_exceeded():
                 select(Workflow).where(Workflow.name == "max cycles persisted")
             )
             workflow = result.scalar_one()
-            assert workflow.status == WorkflowStatus.RUNNING
+            assert workflow.status == WorkflowStatus.ESCALATED
     finally:
         await close_db()
 
@@ -1120,7 +1120,81 @@ async def test_opa_loop_token_budget_exceeded():
                 select(Workflow).where(Workflow.name == "token budget persisted")
             )
             workflow = result.scalar_one()
-            assert workflow.status == WorkflowStatus.RUNNING
+            assert workflow.status == WorkflowStatus.ESCALATED
+    finally:
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_escalation_persists_escalated_terminal_status():
+    """A max-cycles escalation must persist WorkflowStatus.ESCALATED, not RUNNING.
+
+    Regression guard: previously the final escalation returns in OPALoop.run()
+    persisted WorkflowStatus.RUNNING while returning WorkflowResult(status=
+    "escalated") in memory. That left the DB row stuck RUNNING forever, so the
+    monitoring UI showed it as perpetually running and Engine.start() state
+    replay recovered it as in-flight (inheriting its exhausted cycle/token
+    state and producing a bogus immediate 1-cycle re-escalation on the next
+    run). Escalated is a terminal state and must be persisted as such.
+    """
+    from celeste.core.engine import Engine
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=1,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=False)
+        planner = _StubPlanner(fragments=[fragment])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.CONTINUE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.run(goal="escalation persists")
+
+        assert isinstance(result, WorkflowResult)
+        assert result.status == "escalated"
+        assert result.reason == "max_cycles_exceeded"
+        assert result.workflow_id is not None
+
+        # The persisted DB row must be terminal ESCALATED, not stuck RUNNING.
+        async with get_session() as session:
+            db_result = await session.execute(
+                select(Workflow).where(Workflow.name == "escalation persists")
+            )
+            workflow = db_result.scalar_one()
+            assert workflow.status == WorkflowStatus.ESCALATED
+            assert workflow.status.value == "escalated"
+
+        # A fresh Engine.start() against the same DB must NOT recover this
+        # workflow as in-flight. State replay (_replay_state) only recovers
+        # rows with status == RUNNING, so the ESCALATED terminal row is
+        # correctly skipped. We assert this two ways:
+        #   1. The escalated row stays ESCALATED (not mutated by replay).
+        #   2. There are zero RUNNING rows in the DB after start() returns.
+        engine = Engine(settings=settings)
+        await engine.start()
+        try:
+            async with get_session() as session:
+                escalated_row = await session.execute(
+                    select(Workflow).where(Workflow.name == "escalation persists")
+                )
+                escalated = escalated_row.scalar_one()
+                # Replay must not have touched the terminal row.
+                assert escalated.status == WorkflowStatus.ESCALATED
+
+                running_db_result = await session.execute(
+                    select(Workflow).where(Workflow.status == WorkflowStatus.RUNNING)
+                )
+                assert running_db_result.scalars().all() == []
+        finally:
+            await engine.stop()
     finally:
         await close_db()
 

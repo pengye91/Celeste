@@ -390,7 +390,7 @@ class OPALoop:
             # -- Safety limits ------------------------------------------------
             cycle_count += 1
             if cycle_count > max_cycles:
-                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
                 return WorkflowResult(
                     status="escalated",
                     reason="max_cycles_exceeded",
@@ -402,7 +402,7 @@ class OPALoop:
             # In production this would come from actual LLM usage metadata
             llm_tokens_accumulated += 100
             if llm_tokens_accumulated >= max_llm_tokens:
-                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
                 return WorkflowResult(
                     status="escalated",
                     reason="token_budget_exceeded",
@@ -464,7 +464,7 @@ class OPALoop:
                 )
             except PlannerTimeoutError:
                 if cycle_count == 1:
-                    await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                    await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
                     return WorkflowResult(
                         status="escalated",
                         reason="planner_timeout_no_progress",
@@ -788,7 +788,7 @@ class OPALoop:
         while True:
             cycle_count += 1
             if cycle_count > max_cycles:
-                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
                 return WorkflowResult(
                     status="escalated",
                     reason="max_cycles_exceeded",
@@ -799,7 +799,7 @@ class OPALoop:
 
             llm_tokens_accumulated += 100
             if llm_tokens_accumulated >= max_llm_tokens:
-                await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
                 return WorkflowResult(
                     status="escalated",
                     reason="token_budget_exceeded",
@@ -865,7 +865,7 @@ class OPALoop:
                 )
             except PlannerTimeoutError:
                 if cycle_count == 1:
-                    await self._update_workflow_status(workflow_id, WorkflowStatus.RUNNING)
+                    await self._update_workflow_status(workflow_id, WorkflowStatus.ESCALATED)
                     return WorkflowResult(
                         status="escalated",
                         reason="planner_timeout_no_progress",
