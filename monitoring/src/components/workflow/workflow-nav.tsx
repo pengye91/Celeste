@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import LayoutDashboard from "lucide-react/dist/esm/icons/layout-dashboard";
 import Orbit from "lucide-react/dist/esm/icons/orbit";
@@ -9,19 +12,19 @@ import Undo2 from "lucide-react/dist/esm/icons/undo-2";
 import Hand from "lucide-react/dist/esm/icons/hand";
 
 interface TabDef {
-  href: string;
+  path: string | null;
   label: string;
   icon: React.ElementType;
 }
 
 const TABS: TabDef[] = [
-  { href: "./", label: "Overview", icon: LayoutDashboard },
-  { href: "./constellation", label: "Constellation", icon: Orbit },
-  { href: "./opa-loop", label: "OPA Loop", icon: RotateCcw },
-  { href: "./security", label: "Security", icon: Shield },
-  { href: "./workspaces", label: "Workspaces", icon: Boxes },
-  { href: "./saga", label: "Saga", icon: Undo2 },
-  { href: "./escalation", label: "Escalation", icon: Hand },
+  { path: null, label: "Overview", icon: LayoutDashboard },
+  { path: "constellation", label: "Constellation", icon: Orbit },
+  { path: "opa-loop", label: "OPA Loop", icon: RotateCcw },
+  { path: "security", label: "Security", icon: Shield },
+  { path: "workspaces", label: "Workspaces", icon: Boxes },
+  { path: "saga", label: "Saga", icon: Undo2 },
+  { path: "escalation", label: "Escalation", icon: Hand },
 ];
 
 function TabLink({
@@ -53,14 +56,19 @@ function TabLink({
 }
 
 export function WorkflowNav({ activeTab }: { activeTab: "overview" | "constellation" | "opa-loop" | "security" | "workspaces" | "saga" | "escalation" }) {
+  const params = useParams<{ id: string }>();
+  const workflowId = params?.id ?? "";
+  const base = `/workflows/${workflowId}`;
+
   return (
     <nav className="flex items-center border-b border-space-600/50 overflow-x-auto scrollbar-hide" aria-label="Workflow tabs">
       {TABS.map((tab) => {
         const isActive = activeTab === tab.label.toLowerCase().replace(/ /g, "-");
+        const href = tab.path ? `${base}/${tab.path}` : base;
         return (
           <TabLink
             key={tab.label}
-            href={tab.href}
+            href={href}
             label={tab.label}
             icon={tab.icon}
             isActive={isActive}
