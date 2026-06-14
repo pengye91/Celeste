@@ -8,6 +8,7 @@ import { StatusOrb } from "@/components/ui/status-orb";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useWorkflows } from "@/hooks/useWorkflow";
 import { formatRelativeTime } from "@/lib/format";
+import { isAlertStatus, statusOrbVariant, statusBadgeVariant } from "@/lib/workflowStatus";
 import { cn } from "@/lib/utils";
 import Activity from "lucide-react/dist/esm/icons/activity";
 import Clock from "lucide-react/dist/esm/icons/clock";
@@ -156,9 +157,9 @@ function ThroughputStrip({ workflows }: { workflows: { status: string; created_a
 }
 
 function AlertFlare({ workflows }: { workflows: { id: string; name: string; status: string }[] }) {
-  const alerts = workflows.filter(
-    (w) => w.status === "failed" || w.status === "paused"
-  );
+  // Terminal/stuck states that need a human's eyes. The canonical set lives
+  // in workflowStatus.ts so new statuses (e.g. escalated) can't be missed.
+  const alerts = workflows.filter((w) => isAlertStatus(w.status));
 
   return (
     <Panel variant="elevated" padding="md">
@@ -183,7 +184,7 @@ function AlertFlare({ workflows }: { workflows: { id: string; name: string; stat
               className="flex items-center gap-3 p-2 rounded-md bg-space-800/50 border border-space-600 hover:border-mars-500/40 transition-colors group"
             >
               <StatusOrb
-                variant={w.status === "failed" ? "error" : "warning"}
+                variant={statusOrbVariant(w.status)}
                 size="md"
               />
               <div className="flex-1 min-w-0">
@@ -265,17 +266,7 @@ function RecentWorkflowsTable({
               className="flex items-center gap-4 p-3 rounded-md bg-space-800/50 border border-space-600 hover:border-space-500 transition-colors"
             >
               <StatusOrb
-                variant={
-                  workflow.status === "running"
-                    ? "running"
-                    : workflow.status === "completed"
-                    ? "success"
-                    : workflow.status === "failed"
-                    ? "error"
-                    : workflow.status === "paused"
-                    ? "warning"
-                    : "idle"
-                }
+                variant={statusOrbVariant(workflow.status)}
                 size="md"
                 pulse={workflow.status === "running"}
               />
@@ -287,19 +278,7 @@ function RecentWorkflowsTable({
                   <span className="text-xs text-comet-500 font-mono">
                     {workflow.id.slice(0, 8)}
                   </span>
-                  <Badge
-                    variant={
-                      workflow.status === "running"
-                        ? "success"
-                        : workflow.status === "completed"
-                        ? "success"
-                        : workflow.status === "failed"
-                        ? "danger"
-                        : workflow.status === "paused"
-                        ? "warning"
-                        : "muted"
-                    }
-                  >
+                  <Badge variant={statusBadgeVariant(workflow.status)}>
                     {workflow.status}
                   </Badge>
                 </div>

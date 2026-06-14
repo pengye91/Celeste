@@ -68,6 +68,19 @@ const failedWorkflow: WorkflowDetail = {
   pause_reason: "Previous pause before failure",
 };
 
+// Escalated is a terminal, needs-attention status distinct from paused
+// (resumable) and failed (node-level crash). The engine persists it when
+// a workflow exhausts a safety limit (cycles/tokens/planner timeout).
+const escalatedWorkflow: WorkflowDetail = {
+  id: "wf-123",
+  name: "Test Workflow",
+  description: "A test workflow",
+  status: "escalated",
+  dag_definition: {},
+  created_at: "2026-06-12T10:00:00Z",
+  updated_at: "2026-06-12T10:05:00Z",
+};
+
 const sampleEscalationEvents: WorkflowWorkflowEvent[] = [
   {
     id: "evt-1",
@@ -338,6 +351,35 @@ describe("EscalationPage", () => {
   it("does not render resume-related controls for running workflow", async () => {
     await renderPage({ id: "wf-123" }, runningWorkflow, []);
     expect(screen.queryByRole("button", { name: /Submit & Resume/i })).not.toBeInTheDocument();
+  });
+
+  // ------------------------------------------------------------------
+  // Escalated status: terminal, needs-attention, NOT resumable.
+  // Regression: escalated used to fall through to the default StatusPanel
+  // ("Workflow status: escalated") and render a benign muted badge. It now
+  // has an explicit StatusPanel entry and a danger badge.
+  // ------------------------------------------------------------------
+  it("renders the escalated StatusPanel message for an escalated workflow", async () => {
+    await renderPage({ id: "wf-123" }, escalatedWorkflow, []);
+    // The dedicated escalated message mentions the safety-limit escalation.
+    expect(
+      screen.getByText(/escalated after exhausting a safety limit/i)
+    ).toBeInTheDocument();
+  });
+
+  it("renders an 'escalated' status badge for an escalated workflow", async () => {
+    await renderPage({ id: "wf-123" }, escalatedWorkflow, []);
+    // The header badge shows the workflow's status text.
+    expect(screen.getAllByText("escalated").length).toBeGreaterThan(0);
+  });
+
+  it("does not render resume controls for an escalated (terminal) workflow", async () => {
+    await renderPage({ id: "wf-123" }, escalatedWorkflow, []);
+    // Escalated is terminal and out-of-band — there is nothing to resume.
+    expect(
+      screen.queryByRole("button", { name: /Submit & Resume/i })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Workflow Paused")).not.toBeInTheDocument();
   });
 
   // 4. History rendering

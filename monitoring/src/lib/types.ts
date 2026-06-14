@@ -4,6 +4,7 @@ export type WorkflowStatus =
   | "completed"
   | "failed"
   | "paused"
+  | "escalated"
   | "cancelled";
 
 export interface WorkflowListItem {

@@ -102,11 +102,17 @@ const sampleWorkflows: WorkflowListItem[] = [
     status: "completed",
     created_at: "2026-06-12T10:01:00Z",
   },
+  {
+    id: "wf-gamma",
+    name: "Gamma crisis",
+    status: "escalated",
+    created_at: "2026-06-12T10:02:00Z",
+  },
 ];
 
 const workflowsResponse: WorkflowListResponse = {
   items: sampleWorkflows,
-  total: 2,
+  total: 3,
   limit: 12,
   offset: 0,
 };
@@ -340,10 +346,10 @@ describe("WorkflowsPage — URL state preservation", () => {
   it("pairs every status filter chip with a StatusOrb that has a label", async () => {
     mockWorkflowsQuery({ data: workflowsResponse });
     await renderPage();
-    // The page renders 6 status chips (Running, Completed, Failed,
-    // Paused, Pending, Cancelled), each with a StatusOrb.
+    // The page renders 7 status chips (Running, Completed, Failed,
+    // Escalated, Paused, Pending, Cancelled), each with a StatusOrb.
     const orbs = screen.getAllByRole("img");
-    expect(orbs.length).toBeGreaterThanOrEqual(6);
+    expect(orbs.length).toBeGreaterThanOrEqual(7);
   });
 
   it("renders a status badge with text content for each workflow card", async () => {
@@ -355,6 +361,37 @@ describe("WorkflowsPage — URL state preservation", () => {
     // Each card shows a status badge whose text is the workflow's status
     expect(screen.getAllByText("running").length).toBeGreaterThan(0);
     expect(screen.getAllByText("completed").length).toBeGreaterThan(0);
+  });
+
+  // ------------------------------------------------------------------
+  // Escalated status (regression: used to render as a benign idle/muted
+  // card and had no filter chip).
+  // ------------------------------------------------------------------
+  it("renders an Escalated status filter chip", async () => {
+    mockWorkflowsQuery({ data: workflowsResponse });
+    await renderPage();
+    const escalatedChip = getStatusChip("Escalated");
+    expect(escalatedChip).toBeInTheDocument();
+  });
+
+  it("writes ?status=escalated to the URL state when the Escalated chip is clicked", async () => {
+    mockWorkflowsQuery({ data: workflowsResponse });
+    await renderPage();
+    const escalated = getStatusChip("Escalated");
+    await act(async () => {
+      fireEvent.click(escalated);
+    });
+    expect(urlState.status).toBe("escalated");
+  });
+
+  it("renders an escalated workflow card with an 'escalated' status badge", async () => {
+    mockWorkflowsQuery({ data: workflowsResponse });
+    await renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Gamma crisis")).toBeInTheDocument();
+    });
+    // The escalated workflow's badge text is "escalated".
+    expect(screen.getAllByText("escalated").length).toBeGreaterThan(0);
   });
 
   it("renders the page in a focus-trap-safe way: no positive tabindex traps", async () => {
@@ -376,7 +413,7 @@ describe("WorkflowsPage — URL state preservation", () => {
     const listbox = screen.getByRole("listbox", { name: /workflows/i });
     expect(listbox).toBeInTheDocument();
     const options = screen.getAllByRole("option");
-    expect(options.length).toBe(2);
+    expect(options.length).toBe(3);
   });
 
   it("marks the first workflow as selected by default", async () => {

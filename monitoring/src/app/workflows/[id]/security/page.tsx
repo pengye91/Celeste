@@ -11,6 +11,7 @@ import {
 import { useWorkflowEvents } from "@/hooks/useWorkflowEvents";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { formatTimestamp } from "@/lib/format";
+import { statusOrbVariant, statusBadgeVariant } from "@/lib/workflowStatus";
 import { WorkflowNav } from "@/components/workflow/workflow-nav";
 import { cn } from "@/lib/utils";
 import ArrowLeft from "lucide-react/dist/esm/icons/arrow-left";
@@ -458,17 +459,7 @@ function SecurityAuditPageInner({
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="flex items-start gap-4">
                 <StatusOrb
-                  variant={
-                    workflow.status === "running"
-                      ? "running"
-                      : workflow.status === "completed"
-                      ? "success"
-                      : workflow.status === "failed"
-                      ? "error"
-                      : workflow.status === "paused"
-                      ? "warning"
-                      : "idle"
-                  }
+                  variant={statusOrbVariant(workflow.status)}
                   size="lg"
                   pulse={workflow.status === "running"}
                 />
@@ -477,19 +468,7 @@ function SecurityAuditPageInner({
                     {workflow.name}
                   </h1>
                   <div className="flex items-center gap-3 mt-2 flex-wrap">
-                    <Badge
-                      variant={
-                        workflow.status === "running"
-                          ? "success"
-                          : workflow.status === "completed"
-                          ? "success"
-                          : workflow.status === "failed"
-                          ? "danger"
-                          : workflow.status === "paused"
-                          ? "warning"
-                          : "muted"
-                      }
-                    >
+                    <Badge variant={statusBadgeVariant(workflow.status)}>
                       {workflow.status}
                     </Badge>
                     <span className="text-xs font-mono text-comet-500">
@@ -521,17 +500,7 @@ function SecurityAuditPageInner({
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div className="flex items-start gap-4">
                 <StatusOrb
-                  variant={
-                    workflow.status === "running"
-                      ? "running"
-                      : workflow.status === "completed"
-                      ? "success"
-                      : workflow.status === "failed"
-                      ? "error"
-                      : workflow.status === "paused"
-                      ? "warning"
-                      : "idle"
-                  }
+                  variant={statusOrbVariant(workflow.status)}
                   size="lg"
                   pulse={workflow.status === "running"}
                 />
@@ -540,19 +509,7 @@ function SecurityAuditPageInner({
                     {workflow.name}
                   </h1>
                   <div className="flex items-center gap-3 mt-2 flex-wrap">
-                    <Badge
-                      variant={
-                        workflow.status === "running"
-                          ? "success"
-                          : workflow.status === "completed"
-                          ? "success"
-                          : workflow.status === "failed"
-                          ? "danger"
-                          : workflow.status === "paused"
-                          ? "warning"
-                          : "muted"
-                      }
-                    >
+                    <Badge variant={statusBadgeVariant(workflow.status)}>
                       {workflow.status}
                     </Badge>
                     <span className="text-xs font-mono text-comet-500">

@@ -11,6 +11,7 @@ import type { WorkflowMetrics } from "@/lib/types";
 import { useUrlState } from "@/hooks/useUrlState";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { formatRelativeTime } from "@/lib/format";
+import { getStatusVariant } from "@/lib/workflowStatus";
 import { cn } from "@/lib/utils";
 import Clock from "lucide-react/dist/esm/icons/clock";
 import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw";
@@ -29,6 +30,7 @@ const STATUS_OPTIONS = [
   "running",
   "completed",
   "failed",
+  "escalated",
   "paused",
   "pending",
   "cancelled",
@@ -39,6 +41,7 @@ const STATUS_FILTERS: { value: StatusFilterValue; label: string; variant: "succe
   { value: "running", label: "Running", variant: "success" },
   { value: "completed", label: "Completed", variant: "default" },
   { value: "failed", label: "Failed", variant: "danger" },
+  { value: "escalated", label: "Escalated", variant: "danger" },
   { value: "paused", label: "Paused", variant: "warning" },
   { value: "pending", label: "Pending", variant: "muted" },
   { value: "cancelled", label: "Cancelled", variant: "info" },
@@ -128,16 +131,9 @@ function WorkflowCard({
   };
   selected?: boolean;
 }) {
-  const statusConfig =
-    workflow.status === "running"
-      ? { orb: "running" as const, badge: "success" as const }
-      : workflow.status === "completed"
-      ? { orb: "success" as const, badge: "success" as const }
-      : workflow.status === "failed"
-      ? { orb: "error" as const, badge: "danger" as const }
-      : workflow.status === "paused"
-      ? { orb: "warning" as const, badge: "warning" as const }
-      : { orb: "idle" as const, badge: "muted" as const };
+  // Canonical status -> {orb, badge} mapping lives in workflowStatus.ts
+  // so every page handles all statuses (incl. escalated) consistently.
+  const statusConfig = getStatusVariant(workflow.status);
 
   const elapsed = workflow.elapsed_seconds
     ? workflow.elapsed_seconds < 60

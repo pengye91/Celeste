@@ -14,6 +14,7 @@ import {
 import { useWorkflowWorkflowEvents } from "@/hooks/useWorkflowEvents";
 import { useToast } from "@/hooks/useToast";
 import { formatTimestamp, formatDuration } from "@/lib/format";
+import { statusOrbVariant, statusBadgeVariant } from "@/lib/workflowStatus";
 import { cn } from "@/lib/utils";
 import type { WorkflowEvent, WorkflowWorkflowEvent } from "@/lib/types";
 import ArrowLeft from "lucide-react/dist/esm/icons/arrow-left";
@@ -461,6 +462,12 @@ function StatusPanel({
       icon: <AlertTriangle className="w-5 h-5" aria-hidden="true" />,
       message: "Workflow failed. Check the overview or event ledger for details.",
     },
+    escalated: {
+      color: "text-mars-400",
+      icon: <Hand className="w-5 h-5" aria-hidden="true" />,
+      message:
+        "Workflow escalated after exhausting a safety limit (cycles, tokens, or planner timeout). It is in a terminal state and requires out-of-band human review.",
+    },
     cancelled: {
       color: "text-comet-400",
       icon: <Ban className="w-5 h-5" aria-hidden="true" />,
@@ -628,17 +635,7 @@ function EscalationPageInner({
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="flex items-start gap-4">
             <StatusOrb
-              variant={
-                workflow?.status === "running"
-                  ? "running"
-                  : workflow?.status === "completed"
-                  ? "success"
-                  : workflow?.status === "failed"
-                  ? "error"
-                  : workflow?.status === "paused"
-                  ? "warning"
-                  : "idle"
-              }
+              variant={statusOrbVariant(workflow?.status ?? "")}
               size="lg"
               pulse={workflow?.status === "running"}
             />
@@ -648,19 +645,7 @@ function EscalationPageInner({
               </h1>
               <div className="flex items-center gap-3 mt-2 flex-wrap">
                 {workflow && (
-                  <Badge
-                    variant={
-                      workflow.status === "running"
-                        ? "success"
-                        : workflow.status === "completed"
-                        ? "success"
-                        : workflow.status === "failed"
-                        ? "danger"
-                        : workflow.status === "paused"
-                        ? "warning"
-                        : "muted"
-                    }
-                  >
+                  <Badge variant={statusBadgeVariant(workflow.status)}>
                     {workflow.status}
                   </Badge>
                 )}
