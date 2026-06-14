@@ -60,6 +60,9 @@ from celeste.api.schemas import (
     RunRequest,
     RunResponse,
     RunStatus,
+    RetentionCleanupResponse,
+    ResumeWorkflowRequest,
+    ResumeWorkflowResponse,
 )
 from celeste.core.agent.agent import EnvironmentAgent
 from celeste.toolkits.base import BaseToolkit
@@ -213,24 +216,36 @@ def create_app(
     async def lifespan(app: FastAPI):
         """Manage engine lifecycle: start on startup, stop on shutdown.
 
-        On shutdown (after ``engine.stop()``) this cancels every in-flight
-        ``/api/runs`` background task and marks any run still at status
-        ``"running"`` as ``"failed"`` (error=``"shutdown"``) so observers see
-        the truth instead of a run stuck "running" forever. Mirrors the
-        teardown the test fixture / ``run_embedded`` already do manually.
+        On shutdown this cancels every in-flight ``/api/runs`` background
+        task and marks any run still at status ``"running"`` as
+        ``"failed"`` (error=``"shutdown"``) so observers see the truth
+        instead of a run stuck "running" forever. Mirrors the teardown the
+        test fixture / ``run_embedded`` already do manually.
+
+        Ordering matters: in-flight OPA-loop tasks must be cancelled
+        *before* ``engine.stop()`` closes the database. Otherwise the
+        tasks' ``CancelledError`` handlers race to persist a terminal
+        status against an already-disposed connection and surface noisy
+        "Cannot operate on a closed database" errors.
         """
         await engine.start()
         yield
-        await engine.stop()
 
-        # Cancel in-flight /api/runs tasks, then await them with a timeout.
+        # Cancel in-flight /api/runs tasks FIRST, while the DB is still open,
+        # so their CancelledError handlers can persist a clean terminal state.
         # Shielding protects against CancelledError bubbling up here.
         running_run_tasks: dict[str, asyncio.Task] = getattr(
             app.state, "running_run_tasks", {}
         )
+        # Track the run_ids we actually cancel so the status-flip below is
+        # race-free: _run_opa_loop's exception handler may beat us to setting
+        # status="failed" with a noisy DB-closed error, but a shutdown cancel
+        # must always read back as error="shutdown" to the caller.
+        cancelled_run_ids: set[str] = set()
         for rid, task in list(running_run_tasks.items()):
             if not task.done():
                 task.cancel()
+                cancelled_run_ids.add(rid)
         if running_run_tasks:
             try:
                 await asyncio.wait(
@@ -240,11 +255,18 @@ def create_app(
             except asyncio.CancelledError:
                 pass
 
+        # Now that in-flight runs have settled, close the engine + database.
+        await engine.stop()
+
         # Flip any run still at status "running" to "failed" (error="shutdown").
+        # For runs we explicitly cancelled, force the error to "shutdown"
+        # regardless of what the exception handler raced to record.
         runs: dict[str, dict[str, Any]] = getattr(app.state, "runs", {})
         for rid, record in runs.items():
             if record.get("status") == "running":
                 record["status"] = "failed"
+                record["error"] = "shutdown"
+            elif rid in cancelled_run_ids:
                 record["error"] = "shutdown"
 
     app = FastAPI(
@@ -352,6 +374,37 @@ def create_app(
         return {"status": "ok", "version": _API_VERSION}
 
     # ------------------------------------------------------------------
+    # POST /api/admin/retention/cleanup (TODO-19)
+    # ------------------------------------------------------------------
+
+    @app.post(
+        "/api/admin/retention/cleanup",
+        response_model=RetentionCleanupResponse,
+        tags=["admin"],
+    )
+    async def run_retention_cleanup():
+        """Trigger a workflow retention sweep on demand.
+
+        The engine also runs this on a background timer
+        (every 12h) when ``WORKFLOW_RETENTION_DAYS > 0``; this endpoint lets
+        an operator force a sweep immediately. Reports the count of workflows
+        actually deleted plus the raw backlog of candidates (which is larger
+        because it includes lineage-protected parents).
+        """
+        from celeste.database.retention import (
+            cleanup_old_workflows,
+            count_retention_candidates,
+        )
+
+        result = await cleanup_old_workflows(settings)
+        candidates = await count_retention_candidates(settings)
+        return RetentionCleanupResponse(
+            deleted=result["deleted"],
+            candidates=candidates,
+            retention_days=settings.WORKFLOW_RETENTION_DAYS if settings is not None else 0,
+        )
+
+    # ------------------------------------------------------------------
     # POST /api/workflows
     # ------------------------------------------------------------------
 
@@ -446,6 +499,9 @@ def create_app(
                     name=wf.name,
                     status=wf.status.value,
                     created_at=_utc_iso(wf.created_at),
+                    parent_workflow_id=(
+                        str(wf.parent_workflow_id) if wf.parent_workflow_id else None
+                    ),
                 )
                 for wf in workflows
             ]
@@ -489,6 +545,9 @@ def create_app(
                 dag_definition=wf.dag_definition,
                 created_at=_utc_iso(wf.created_at),
                 updated_at=_utc_iso(wf.updated_at),
+                parent_workflow_id=(
+                    str(wf.parent_workflow_id) if wf.parent_workflow_id else None
+                ),
             )
 
     # ------------------------------------------------------------------
@@ -1115,6 +1174,113 @@ def create_app(
         return WorkflowResponse(workflow_id=workflow_id, status="cancelled")
 
     # ------------------------------------------------------------------
+    # POST /api/workflows/{workflow_id}/resume (TODO-2)
+    #
+    # Human-in-the-loop escalation: a paused (escalated) workflow is resumed
+    # with human guidance. The endpoint validates the workflow is in PAUSED
+    # state, rebuilds the in-process cognitive stack exactly like /api/runs,
+    # and runs engine.resume_workflow in the background so the API returns
+    # immediately. Operators poll GET /api/workflows/{id}/status + the
+    # workflow-events stream for the outcome.
+    # ------------------------------------------------------------------
+
+    @app.post(
+        "/api/workflows/{workflow_id}/resume",
+        response_model=ResumeWorkflowResponse,
+        tags=["workflows"],
+    )
+    async def resume_workflow(workflow_id: str, body: ResumeWorkflowRequest):
+        """Resume a paused workflow with human guidance.
+
+        The workflow must be in the ``paused`` state (set by an OPA-loop
+        escalation). ``human_input`` is recorded on the workflow row and
+        injected as the observation for the next OPA cycle.
+
+        Returns immediately with ``status="running"`` and a ``resume_id`` for
+        correlation. The actual resume runs in the background; the workflow's
+        progress is observable via the status / events endpoints.
+        """
+        try:
+            wf_uuid = uuid.UUID(workflow_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+
+        # Existence + state guard. Only PAUSED workflows can be resumed.
+        async with get_session() as session:
+            result = await session.execute(
+                select(Workflow).where(Workflow.id == wf_uuid)
+            )
+            wf = result.scalar_one_or_none()
+            if wf is None:
+                raise HTTPException(status_code=404, detail="Workflow not found")
+            if wf.status != WorkflowStatus.PAUSED:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot resume workflow in '{wf.status.value}' state; "
+                        "only paused workflows can be resumed."
+                    ),
+                )
+
+        resume_id = uuid.uuid4().hex
+        # Track the in-flight resume so it can be awaited/cancelled on
+        # shutdown (mirrors /api/runs bookkeeping).
+        task = asyncio.create_task(_resume_opa_loop(app, wf_uuid, body.human_input))
+        app.state.running_run_tasks[resume_id] = task
+
+        return ResumeWorkflowResponse(
+            workflow_id=workflow_id,
+            status="running",
+            resume_id=resume_id,
+        )
+
+    async def _resume_opa_loop(
+        app: FastAPI, workflow_id: uuid.UUID, human_input: str
+    ) -> None:
+        """Background worker that drives engine.resume_workflow().
+
+        Builds the in-process cognitive stack (agent + planner + evaluator)
+        from app.state exactly like _run_opa_loop, then delegates to
+        Engine.resume_workflow. Exceptions are logged and swallowed so the
+        background task never tears down the event loop; the workflow's
+        terminal status reflects the outcome.
+        """
+        settings_ref: EngineSettings = app.state.settings
+        engine_ref: Engine = app.state.engine
+        try:
+            agent = EnvironmentAgent.in_process(
+                workdir=".", toolkits=app.state.toolkits
+            )
+            llm_client = app.state.llm_client
+            if llm_client is None:
+                llm_client = _build_llm_client(settings_ref)
+            planner = app.state.planner_factory(settings_ref, app.state.toolkits, llm_client)
+            evaluator = app.state.evaluator_factory(settings_ref, llm_client)
+
+            await engine_ref.resume_workflow(
+                workflow_id=workflow_id,
+                human_input=human_input,
+                agent=agent,
+                planner=planner,
+                evaluator=evaluator,
+            )
+            logger.info(
+                "Resume %s: completed for workflow %s",
+                workflow_id, workflow_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "Resume of workflow %s failed: %s", workflow_id, exc, exc_info=True,
+            )
+        finally:
+            # Best-effort cleanup of any resume_id key we created.
+            for rid, t in list(getattr(app.state, "running_run_tasks", {}).items()):
+                if t.done() and t.get_name() != rid:
+                    app.state.running_run_tasks.pop(rid, None)
+
+    # ------------------------------------------------------------------
     # Agent management endpoints
     # ------------------------------------------------------------------
 
@@ -1339,6 +1505,9 @@ def create_app(
             run_kwargs["max_cycles"] = body.max_cycles
         if body.max_llm_tokens is not None:
             run_kwargs["max_llm_tokens"] = body.max_llm_tokens
+        # TODO-6: pass the optional cost budget through to the OPA loop.
+        if body.max_llm_cost_usd is not None:
+            run_kwargs["max_llm_cost_usd"] = body.max_llm_cost_usd
 
         try:
             # (a) best-effort seed load via DI (loader + path injected by caller).

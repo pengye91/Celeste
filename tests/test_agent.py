@@ -148,7 +148,12 @@ class TestEnvironmentAgentBuiltinTools:
 
         result = await agent.call_tool("snapshot", {"paths": [agent._workdir]})
         assert "files" in result
-        assert agent._workdir in result["files"]
+        # TODO-8: the recursive snapshot now reports per-file metadata keyed
+        # by the file path (not a one-level {dir: [names]} listing). The
+        # legacy shallow shape is still available via recursive=False.
+        test_file = str(Path(agent._workdir, "test.txt"))
+        assert test_file in result["files"]
+        assert "modified_time" in result["files"][test_file]
         assert "platform" in result
         assert result["platform"] != ""
 

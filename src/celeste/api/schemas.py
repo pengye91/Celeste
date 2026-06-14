@@ -44,6 +44,9 @@ class WorkflowListItem(BaseModel):
     name: str
     status: str
     created_at: str
+    # TODO-20: checkpoint lineage. The parent run this one was continued from
+    # via Continue-As-New, or None for top-level workflows.
+    parent_workflow_id: str | None = None
 
 
 class WorkflowDetailResponse(BaseModel):
@@ -56,6 +59,8 @@ class WorkflowDetailResponse(BaseModel):
     dag_definition: dict
     created_at: str
     updated_at: str
+    # TODO-20: checkpoint lineage.
+    parent_workflow_id: str | None = None
 
 
 class NodeStatusItem(BaseModel):
@@ -162,6 +167,14 @@ class CORSOrigins(BaseModel):
     origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
 
+class RetentionCleanupResponse(BaseModel):
+    """Response for POST /api/admin/retention/cleanup (TODO-19)."""
+
+    deleted: int
+    candidates: int
+    retention_days: int
+
+
 class RegisterAgentRequest(BaseModel):
     """Request body for POST /agents/register."""
 
@@ -216,6 +229,9 @@ class RunRequest(BaseModel):
     goal: str = Field(min_length=1)
     max_cycles: int | None = Field(default=None, ge=1)
     max_llm_tokens: int | None = Field(default=None, ge=1)
+    # TODO-6: optional per-run USD cost ceiling. None falls back to the
+    # engine's MAX_LLM_COST_USD setting; 0 disables the cost check.
+    max_llm_cost_usd: float | None = Field(default=None, ge=0)
 
 
 class RunResponse(BaseModel):
@@ -248,3 +264,29 @@ class RunStatus(BaseModel):
     status: str
     workflow_id: str | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# TODO-2: Human-in-the-loop escalation resume schemas
+# ---------------------------------------------------------------------------
+
+
+class ResumeWorkflowRequest(BaseModel):
+    """Request body for POST /api/workflows/{id}/resume (TODO-2).
+
+    A paused (escalated) workflow is resumed with human guidance injected as
+    context for the next OPA cycle. The endpoint rebuilds the in-process
+    cognitive stack (agent + planner + evaluator) the same way /api/runs does
+    and runs the OPA-loop resume in the background; poll the workflow's
+    status / events for the outcome.
+    """
+
+    human_input: str = Field(min_length=1)
+
+
+class ResumeWorkflowResponse(BaseModel):
+    """Response for POST /api/workflows/{id}/resume."""
+
+    workflow_id: str
+    status: str
+    resume_id: str

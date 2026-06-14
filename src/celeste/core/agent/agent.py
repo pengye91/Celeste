@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import os
 import sys
 from typing import Any
 
@@ -47,6 +48,22 @@ _BUILTIN_TOOLS = [
                 "include_processes": {
                     "type": "boolean",
                     "description": "Whether to include process info.",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": (
+                        "If true (default), walk each path recursively and "
+                        "return per-file mtime metadata. If false, do a "
+                        "shallow one-level listing (legacy behaviour)."
+                    ),
+                },
+                "force_full": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, bypass the mtime cache and return a full "
+                        "recursive listing (TODO-8). Use after clock skew or "
+                        "an external mutation you suspect the cache missed."
+                    ),
                 },
             },
             "required": [],
@@ -238,6 +255,12 @@ class EnvironmentAgent:
         self._security_auditor = security_auditor
         self._tool_registry = tool_registry
         self._running = False
+        # TODO-8: incremental snapshot cache. Maps an absolute file path to
+        # the st_mtime observed on the last snapshot walk. Subsequent
+        # snapshots skip files whose mtime has not advanced, so a large
+        # workspace is not re-walked in full on every OPA cycle. Clear the
+        # cache by passing force_full=True to the snapshot tool.
+        self._snapshot_mtime_cache: dict[str, float] = {}
 
         # In-process transport needs a reference to this agent
         if isinstance(self._transport, InProcessTransport):
@@ -504,17 +527,101 @@ class EnvironmentAgent:
     # -- built-in implementations --------------------------------------------
 
     async def _builtin_snapshot(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Return a consolidated environment snapshot.
+
+        TODO-8: when ``recursive`` is true (the default) the snapshot walks
+        each path recursively, records per-file mtime/size metadata, and
+        consults ``self._snapshot_mtime_cache`` so subsequent calls only
+        return files whose mtime has advanced since the last walk. Pass
+        ``force_full=True`` to bypass the cache (e.g. after clock skew or an
+        external mutation you suspect the cache missed).
+
+        The legacy shallow behaviour (one-level listing keyed by path) is
+        preserved when ``recursive=False``.
+        """
         paths = arguments.get("paths", [self._workdir])
-        files: dict[str, Any] = {}
+        recursive = arguments.get("recursive", True)
+        force_full = arguments.get("force_full", False)
         driver = self._fs_driver or self._shell_driver
-        if driver is not None:
-            for p in paths:
+
+        if not recursive:
+            # Legacy shallow path: one-level listing, no caching.
+            files: dict[str, Any] = {}
+            if driver is not None:
+                for p in paths:
+                    try:
+                        result = await driver.list_directory(p)
+                        files[p] = (
+                            result.files if hasattr(result, "files") else result.get("files", [])
+                        )
+                    except Exception:
+                        files[p] = []
+            return {"files": files, "platform": sys.platform}
+
+        if driver is None:
+            return {"files": {}, "platform": sys.platform, "error": "no_driver"}
+
+        # Recursive incremental walk.
+        # ``incoming_cache`` is the cache state at call time. We snapshot it
+        # before any force_full reset so the ``incremental`` flag reflects the
+        # call, not the post-reset state.
+        incoming_cache = dict(self._snapshot_mtime_cache)
+        # On a force_full reset we discard the cache so the walk reports every
+        # file and re-seeds the cache from scratch.
+        if force_full:
+            self._snapshot_mtime_cache.clear()
+        cache = self._snapshot_mtime_cache
+
+        changed: dict[str, dict[str, Any]] = {}
+        new_cache: dict[str, float] = {}
+
+        for root in paths:
+            # Walk breadth-first. We collect every file's mtime, decide
+            # changed-vs-cache, and rebuild the cache as we go.
+            queue: list[str] = [root]
+            while queue:
+                current = queue.pop(0)
                 try:
-                    result = await driver.list_directory(p)
-                    files[p] = result.files if hasattr(result, "files") else result.get("files", [])
+                    listing = await driver.list_directory(current)
                 except Exception:
-                    files[p] = []
-        return {"files": files, "platform": sys.platform}
+                    continue
+                entries = listing.files if hasattr(listing, "files") else listing.get("files", [])
+                for name in entries:
+                    full = name if os.path.isabs(name) else os.path.join(current, name)
+                    # Decide dir vs file. We prefer os.path.isdir (the agent
+                    # process sees its own filesystem in-process); drivers
+                    # that proxy to a remote host override list_directory/stat
+                    # and the local os.path check is a best-effort fallback.
+                    try:
+                        if os.path.isdir(full):
+                            queue.append(full)
+                            continue
+                    except Exception:
+                        pass
+                    # File: probe stat for mtime/size.
+                    try:
+                        st = await driver.stat(full)
+                    except Exception:
+                        continue
+                    mtime = st.modified_time
+                    new_cache[full] = mtime
+                    cached_mtime = cache.get(full)
+                    if cached_mtime is None or mtime > cached_mtime:
+                        changed[full] = {
+                            "size": st.size,
+                            "modified_time": mtime,
+                        }
+
+        # Atomically swap in the freshly-built cache.
+        self._snapshot_mtime_cache = new_cache
+        return {
+            "files": changed,
+            "platform": sys.platform,
+            # True when this call was a real incremental diff against a
+            # non-empty prior cache (i.e. not a cold start and not forced).
+            "incremental": (not force_full) and len(incoming_cache) > 0,
+            "changed_count": len(changed),
+        }
 
     async def _builtin_list_directory(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = arguments.get("path", self._workdir)
