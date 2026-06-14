@@ -67,6 +67,25 @@ from celeste.toolkits.system_data import SystemDataToolkit
 
 logger = logging.getLogger(__name__)
 
+
+def _utc_iso(dt: datetime.datetime | None) -> str | None:
+    """Serialize a DB-sourced datetime as a timezone-aware UTC ISO 8601 string.
+
+    SQLite/aiosqlite strips ``tzinfo`` on retrieval, so DB datetimes are naive
+    (UTC value, no offset). Serializing them with bare ``.isoformat()`` yields a
+    string with NO timezone marker, which the frontend ``new Date(iso)`` parses
+    as LOCAL time — producing wrong relative times.
+
+    This helper re-stamps naive datetimes as UTC so ``.isoformat()`` emits a
+    trailing ``+00:00`` offset, while preserving microseconds and passing
+    through already-aware datetimes unchanged.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.isoformat()
+
 _API_VERSION = "0.1.0"
 
 
@@ -418,7 +437,7 @@ def create_app(
                     id=str(wf.id),
                     name=wf.name,
                     status=wf.status.value,
-                    created_at=wf.created_at.isoformat(),
+                    created_at=_utc_iso(wf.created_at),
                 )
                 for wf in workflows
             ]
@@ -460,8 +479,8 @@ def create_app(
                 description=wf.description or "",
                 status=wf.status.value,
                 dag_definition=wf.dag_definition,
-                created_at=wf.created_at.isoformat(),
-                updated_at=wf.updated_at.isoformat(),
+                created_at=_utc_iso(wf.created_at),
+                updated_at=_utc_iso(wf.updated_at),
             )
 
     # ------------------------------------------------------------------
@@ -735,7 +754,7 @@ def create_app(
                     id=str(e.id),
                     event_type=e.event_type.value,
                     event_data=e.event_data,
-                    timestamp=e.timestamp.isoformat(),
+                    timestamp=_utc_iso(e.timestamp),
                 )
                 for e in events
             ]
@@ -814,7 +833,7 @@ def create_app(
                     event_type=e.event_type.value,
                     event_data=e.event_data,
                     sequence_number=e.sequence_number,
-                    timestamp=e.timestamp.isoformat(),
+                    timestamp=_utc_iso(e.timestamp),
                 )
                 for e in events
             ]
@@ -864,14 +883,12 @@ def create_app(
                 (completed_nodes / total_nodes * 100) if total_nodes > 0 else 0.0
             )
 
-            # Elapsed seconds
+            # Elapsed seconds. _utc_iso re-stamps naive (UTC-valued) DB datetimes
+            # as timezone-aware UTC; here we mirror that for arithmetic by
+            # parsing the helper's output back into an aware datetime.
             now = datetime.datetime.now(datetime.timezone.utc)
-            created_at = wf.created_at
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=datetime.timezone.utc)
-            updated_at = wf.updated_at
-            if updated_at.tzinfo is None:
-                updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+            created_at = datetime.datetime.fromisoformat(_utc_iso(wf.created_at))
+            updated_at = datetime.datetime.fromisoformat(_utc_iso(wf.updated_at))
             if wf.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED, WorkflowStatus.ESCALATED):
                 elapsed_seconds = (updated_at - created_at).total_seconds()
             else:
@@ -974,7 +991,7 @@ def create_app(
                             workflow_id=str(e.workflow_id),
                             event_type=e.event_type.value,
                             event_data=e.event_data,
-                            timestamp=e.timestamp.isoformat(),
+                            timestamp=_utc_iso(e.timestamp),
                         ),
                     )
                 )
@@ -989,7 +1006,7 @@ def create_app(
                             workflow_id=str(e.workflow_id),
                             event_type=e.event_type.value,
                             event_data=e.event_data,
-                            timestamp=e.timestamp.isoformat(),
+                            timestamp=_utc_iso(e.timestamp),
                         ),
                     )
                 )
@@ -1128,7 +1145,7 @@ def create_app(
         return AgentStatusResponse(
             agent_id=agent_id,
             status=status,
-            last_seen=last_seen.isoformat() if last_seen else None,
+            last_seen=_utc_iso(last_seen),
         )
 
     @app.get(
@@ -1148,7 +1165,7 @@ def create_app(
                     url=record["url"],
                     status=status,
                     metadata=record["metadata"],
-                    registered_at=record["registered_at"].isoformat(),
+                    registered_at=_utc_iso(record["registered_at"]),
                 )
             )
         return items
