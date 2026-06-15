@@ -347,20 +347,41 @@ class Engine:
         """
         self._ensure_running()
 
-        if agent is None:
-            raise ValueError("agent is required for OPA loop execution")
         if planner is None:
             raise ValueError("planner is required for OPA loop execution")
         if evaluator is None:
             raise ValueError("evaluator is required for OPA loop execution")
 
-        loop = OPALoop(
-            agent=agent,
-            planner=planner,
-            evaluator=evaluator,
-            settings=self._settings,
-        )
-        return await loop.run(goal=goal, **kwargs)
+        # TODO-5: when no agent is provided, build one whose tool calls are
+        # sandboxed inside the engine's workspace (WORKSPACE_ENGINE setting).
+        # This makes the OPA-loop path respect the workspace containment
+        # boundary for the first time. When the caller provides an agent
+        # explicitly (all current examples + /api/runs), it is used as-is.
+        agent_created_internally = False
+        if agent is None:
+            from celeste.core.agent.agent import EnvironmentAgent
+
+            agent = EnvironmentAgent.in_workspace(
+                workspace_factory=self._workspace_factory,
+            )
+            agent_created_internally = True
+
+        try:
+            loop = OPALoop(
+                agent=agent,
+                planner=planner,
+                evaluator=evaluator,
+                settings=self._settings,
+            )
+            return await loop.run(goal=goal, **kwargs)
+        finally:
+            # Tear down the internally-created agent's workspace so the
+            # sandbox doesn't leak. Caller-provided agents are left alone.
+            if agent_created_internally:
+                try:
+                    await agent.stop()
+                except Exception:
+                    logger.debug("Failed to stop internally-created agent", exc_info=True)
 
     async def resume_workflow(
         self,

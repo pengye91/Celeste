@@ -14,7 +14,7 @@ Captured during /plan-eng-review on 2026-06-11.
 | TODO-2  Human-in-the-loop escalation resume | ✅ Done | `POST /api/workflows/{id}/resume` + `Engine.resume_workflow`. |
 | TODO-3  Alembic database migrations | ✅ Done | `src/celeste/migrations/` with async-aware env.py + baseline. |
 | TODO-4  Agent attestation (crypto signing) | ⏸️ Blocked | Needs key-management / Sigstore decision. |
-| TODO-5  Workspace/agent containment model | ⏸️ Blocked | Architectural decision (agent inside vs outside container). |
+| TODO-5  Workspace/agent containment model | ✅ Done | `WorkspaceDriver` bridges agent → workspace. See `docs/containment-model.md`. |
 | TODO-6  Cycle limit + cost budget | ✅ Done | `MAX_OPA_CYCLES` + `MAX_LLM_COST_USD` (run + resume + /api/runs). |
 | TODO-7  WebSocket remote transport | ✅ Done | `src/celeste/core/agent/transport_ws.py`. |
 | TODO-8  Incremental snapshot w/ mtime cache | ✅ Done | `EnvironmentAgent._builtin_snapshot` + `force_full` / `recursive`. |
@@ -32,7 +32,7 @@ Captured during /plan-eng-review on 2026-06-11.
 | TODO-20 Checkpoint lineage | ✅ Done | `parent_workflow_id` FK + relationships + API exposure. |
 | TODO-21 Monitoring app CI/CD | ✅ Done | `.github/workflows/monitoring.yml` + `monitoring/Dockerfile`. |
 
-**Summary:** 14 done, 7 blocked (all need external resources or decisions).
+**Summary:** 15 done, 6 blocked (all need external resources or decisions).
 
 ---
 

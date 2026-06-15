@@ -16,7 +16,7 @@ import asyncio
 import dataclasses
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from celeste.core.agent.driver import (
     BaseDriver,
@@ -261,6 +261,10 @@ class EnvironmentAgent:
         # workspace is not re-walked in full on every OPA cycle. Clear the
         # cache by passing force_full=True to the snapshot tool.
         self._snapshot_mtime_cache: dict[str, float] = {}
+        # TODO-5: when using in_workspace(), this holds the WorkspaceDriver
+        # so stop() can tear down the underlying workspace. None for other
+        # deployment modes (in_process / remote / serve).
+        self._workspace_driver: Any | None = None
 
         # In-process transport needs a reference to this agent
         if isinstance(self._transport, InProcessTransport):
@@ -354,6 +358,54 @@ class EnvironmentAgent:
         )
         return agent
 
+    @classmethod
+    def in_workspace(
+        cls,
+        workspace_factory: Callable[[], Any] | None = None,
+        toolkits: list[BaseToolkit] | None = None,
+        security_auditor: Any | None = None,
+        tool_registry: Any | None = None,
+    ) -> "EnvironmentAgent":
+        """Create an agent whose tool calls are sandboxed inside a workspace.
+
+        TODO-5 (containment model): the agent's ``shell_driver`` is a
+        :class:`WorkspaceDriver` that delegates ``run_command`` to
+        ``workspace.execute()``, so commands run inside whichever sandbox
+        the workspace provides (LocalTmp / Docker / Firecracker).
+
+        ``workspace_factory`` is a zero-arg callable returning a
+        ``BaseWorkspace``. If ``None``, defaults to ``LocalTmpWorkspace()``.
+
+        File operations (``read_file``, ``stat``, ``snapshot``) work via
+        ``pathlib`` against the workspace's host-side path for LocalTmp /
+        GitWorktree. For Docker / Firecracker they raise
+        ``NotImplementedError`` — use ``run_command`` instead.
+
+        See ``docs/containment-model.md`` for the full design.
+        """
+        from celeste.core.agent.workspace_driver import WorkspaceDriver
+        from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
+
+        if workspace_factory is None:
+            workspace_factory = LocalTmpWorkspace
+
+        shell_driver = WorkspaceDriver(workspace_factory=workspace_factory)
+        # fs_driver=None: the agent falls back to shell_driver (WorkspaceDriver)
+        # for file ops, which use pathlib against the workspace path.
+        agent = cls(
+            transport=None,
+            shell_driver=shell_driver,
+            fs_driver=None,
+            workdir=".",  # overridden by the workspace at runtime
+            toolkits=toolkits,
+            security_auditor=security_auditor,
+            tool_registry=tool_registry,
+        )
+        agent._transport = InProcessTransport(agent)
+        # Keep a reference for lifecycle management (teardown on stop()).
+        agent._workspace_driver = shell_driver
+        return agent
+
     # -- lifecycle -----------------------------------------------------------
 
     async def start(self) -> None:
@@ -370,6 +422,9 @@ class EnvironmentAgent:
             await self._transport.close()
         if hasattr(self, "_server") and self._server is not None:
             await self._server.stop()
+        # TODO-5: tear down the workspace if using a WorkspaceDriver.
+        if self._workspace_driver is not None:
+            await self._workspace_driver.stop()
         self._running = False
 
     @property

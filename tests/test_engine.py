@@ -1791,8 +1791,15 @@ class TestOPALoopIntegration:
             await engine.stop()
 
     @pytest.mark.asyncio
-    async def test_engine_run_without_agent_raises(self, settings):
-        """Engine.run() raises if agent is not provided."""
+    async def test_engine_run_without_agent_auto_creates(self, settings):
+        """Engine.run() without an agent now auto-creates one (TODO-5).
+
+        Previously this raised ValueError("agent is required"). With the
+        containment-model change, the engine builds an
+        EnvironmentAgent.in_workspace() backed by its workspace_factory.
+        The call still fails because no planner/evaluator is provided, but
+        the error is now "planner is required", not "agent is required".
+        """
         from celeste.core.engine import Engine
 
         engine = Engine(
@@ -1801,7 +1808,7 @@ class TestOPALoopIntegration:
         )
         await engine.start()
         try:
-            with pytest.raises(ValueError, match="agent is required"):
+            with pytest.raises(ValueError, match="planner is required"):
                 await engine.run(goal="test goal")
         finally:
             await engine.stop()
