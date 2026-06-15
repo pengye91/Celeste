@@ -111,6 +111,16 @@ class EngineSettings(BaseSettings):
 
     STRICT_SECURITY_MODE: bool = True
 
+    # --- Agent attestation (TODO-4) ---
+    # When True, the engine verifies agent signatures and blocks tool calls
+    # whose signature doesn't verify. When False (default), signatures are
+    # still produced (if the agent has a keypair) but not enforced — this is
+    # the backward-compatible default.
+    ATTESTATION_REQUIRED: bool = False
+    # Optional: pinned public key PEM. If set, all agents must sign with this
+    # key. If None, each agent registers its own key via POST /agents/register.
+    ATTESTATION_PUBLIC_KEY_PEM: str | None = None
+
     # --- Workflow retention (TODO-19) ---
     # Workflows older than this many days in a terminal state (completed,
     # failed, cancelled, escalated) are eligible for cleanup. 0 disables

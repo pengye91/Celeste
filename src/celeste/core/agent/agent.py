@@ -246,6 +246,9 @@ class EnvironmentAgent:
         toolkits: list[BaseToolkit] | None = None,
         security_auditor: Any | None = None,
         tool_registry: Any | None = None,
+        attestation_keypair: Any | None = None,
+        attestation_required: bool = False,
+        expected_public_key_pem: str | None = None,
     ) -> None:
         self._transport = transport
         self._shell_driver = shell_driver
@@ -254,6 +257,14 @@ class EnvironmentAgent:
         self._toolkits: list[BaseToolkit] = list(toolkits) if toolkits else []
         self._security_auditor = security_auditor
         self._tool_registry = tool_registry
+        # TODO-4: agent attestation. When a keypair is set, the agent signs
+        # every tool-execution result. When attestation_required is True, the
+        # agent verifies signed responses from remote agents and blocks
+        # unsigned/invalid ones. expected_public_key_pem pins the remote
+        # agent's key (for remote() mode).
+        self._attestation_keypair = attestation_keypair
+        self._attestation_required = attestation_required
+        self._expected_public_key_pem = expected_public_key_pem
         self._running = False
         # TODO-8: incremental snapshot cache. Maps an absolute file path to
         # the st_mtime observed on the last snapshot walk. Subsequent
@@ -276,6 +287,22 @@ class EnvironmentAgent:
         for toolkit in self._toolkits:
             for tool in toolkit.get_tools():
                 self._tool_routes[tool.name] = (toolkit, tool)
+
+    # -- attestation (TODO-4) -----------------------------------------------
+
+    @property
+    def public_key_pem(self) -> str | None:
+        """The agent's PEM-encoded public key, or None if no keypair is set."""
+        if self._attestation_keypair is None:
+            return None
+        return self._attestation_keypair.public_key_pem
+
+    @property
+    def key_id(self) -> str | None:
+        """Short fingerprint of the agent's public key, or None."""
+        if self._attestation_keypair is None:
+            return None
+        return self._attestation_keypair.key_id
 
     # -- transport routing ---------------------------------------------------
 
@@ -301,11 +328,23 @@ class EnvironmentAgent:
         toolkits: list[BaseToolkit] | None = None,
         security_auditor: Any | None = None,
         tool_registry: Any | None = None,
+        attestation_keypair: Any | None = None,
     ) -> "EnvironmentAgent":
         """Create an in-process agent for local development.
 
         Uses direct Python function calls with no serialization overhead.
+
+        TODO-4: if ``attestation_keypair`` is None (default), a new Ed25519
+        keypair is auto-generated so the agent signs its outputs. Pass
+        ``attestation_keypair=False`` explicitly to disable signing.
         """
+        from celeste.core.attestation import AttestationKeypair
+
+        if attestation_keypair is None:
+            attestation_keypair = AttestationKeypair.generate()
+        elif attestation_keypair is False:
+            attestation_keypair = None
+
         shell_driver = ShellDriver(cwd=workdir)
         fs_driver = FilesystemDriver(base_path=workdir)
         agent = cls(
@@ -316,6 +355,7 @@ class EnvironmentAgent:
             toolkits=toolkits,
             security_auditor=security_auditor,
             tool_registry=tool_registry,
+            attestation_keypair=attestation_keypair,
         )
         # Create transport after agent exists
         agent._transport = InProcessTransport(agent)
@@ -326,12 +366,24 @@ class EnvironmentAgent:
         cls,
         url: str,
         auth_token: str | None = None,
+        expected_public_key_pem: str | None = None,
+        attestation_required: bool = False,
     ) -> "EnvironmentAgent":
-        """Create an agent that connects to a remote agent via WebSocket."""
+        """Create an agent that connects to a remote agent via WebSocket.
+
+        TODO-4: ``expected_public_key_pem`` pins the remote agent's public
+        key for signature verification. When ``attestation_required=True``,
+        unsigned or invalid-signature responses are blocked.
+        """
         from celeste.core.agent.transport_ws import WebSocketTransport
 
         transport = WebSocketTransport(url, auth_token=auth_token)
-        agent = cls(transport=transport, workdir=".")
+        agent = cls(
+            transport=transport,
+            workdir=".",
+            expected_public_key_pem=expected_public_key_pem,
+            attestation_required=attestation_required,
+        )
         return agent
 
     @classmethod
@@ -342,9 +394,20 @@ class EnvironmentAgent:
         workdir: str = ".",
         toolkits: list[BaseToolkit] | None = None,
         auth_token: str | None = None,
+        attestation_keypair: Any | None = None,
     ) -> "EnvironmentAgent":
-        """Create an agent that runs as a standalone WebSocket server."""
+        """Create an agent that runs as a standalone WebSocket server.
+
+        TODO-4: auto-generates an Ed25519 keypair so the server signs every
+        tool result it returns to clients.
+        """
         from celeste.core.agent.transport_ws import WebSocketServer
+        from celeste.core.attestation import AttestationKeypair
+
+        if attestation_keypair is None:
+            attestation_keypair = AttestationKeypair.generate()
+        elif attestation_keypair is False:
+            attestation_keypair = None
 
         agent = cls(
             transport=None,
@@ -352,6 +415,7 @@ class EnvironmentAgent:
             fs_driver=FilesystemDriver(base_path=workdir),
             workdir=workdir,
             toolkits=toolkits,
+            attestation_keypair=attestation_keypair,
         )
         agent._server = WebSocketServer(
             host=host, port=port, agent=agent, auth_token=auth_token
@@ -384,10 +448,13 @@ class EnvironmentAgent:
         See ``docs/containment-model.md`` for the full design.
         """
         from celeste.core.agent.workspace_driver import WorkspaceDriver
+        from celeste.core.attestation import AttestationKeypair
         from celeste.core.workspaces.local_tmp import LocalTmpWorkspace
 
         if workspace_factory is None:
             workspace_factory = LocalTmpWorkspace
+
+        keypair = AttestationKeypair.generate()
 
         shell_driver = WorkspaceDriver(workspace_factory=workspace_factory)
         # fs_driver=None: the agent falls back to shell_driver (WorkspaceDriver)
@@ -400,6 +467,7 @@ class EnvironmentAgent:
             toolkits=toolkits,
             security_auditor=security_auditor,
             tool_registry=tool_registry,
+            attestation_keypair=keypair,
         )
         agent._transport = InProcessTransport(agent)
         # Keep a reference for lifecycle management (teardown on stop()).
@@ -454,7 +522,7 @@ class EnvironmentAgent:
         """
         # Remote transport: forward the request and return the server result.
         if self._uses_remote_transport():
-            return await self._transport.send_request(
+            result = await self._transport.send_request(
                 "call_tool",
                 {
                     "name": name,
@@ -462,6 +530,31 @@ class EnvironmentAgent:
                     "timeout_ms": timeout_ms,
                 },
             )
+            # TODO-4: verify the remote agent's signature if attestation is
+            # configured. The server-side agent signs every result; the
+            # client verifies against the pinned public key.
+            from celeste.core.attestation import (
+                AttestationError,
+                verify_payload,
+            )
+
+            if isinstance(result, dict) and "signature" in result:
+                # Signed response — verify if we have a key to check against.
+                verify_key = self._expected_public_key_pem
+                if verify_key is not None:
+                    if not verify_payload(verify_key, result):
+                        raise AttestationError(
+                            f"Signature verification failed for tool '{name}' "
+                            f"(key_id={result.get('key_id', 'unknown')})"
+                        )
+                # Strip the envelope and return the inner result.
+                return {k: v for k, v in result.items() if k not in ("signature", "key_id")}
+            elif self._attestation_required:
+                raise AttestationError(
+                    f"Remote agent returned unsigned result for tool '{name}', "
+                    "but ATTESTATION_REQUIRED=True"
+                )
+            return result
 
         args = arguments or {}
 
@@ -494,7 +587,17 @@ class EnvironmentAgent:
         except asyncio.TimeoutError:
             return {"error": "tool_timeout", "timeout_ms": timeout_ms}
 
-        return _normalize_result(result)
+        result = _normalize_result(result)
+
+        # TODO-4: sign the result if the agent has an attestation keypair.
+        # Only sign dict results (list_tools returns a list; signing lists
+        # is not meaningful).
+        if self._attestation_keypair is not None and isinstance(result, dict):
+            from celeste.core.attestation import sign_payload
+
+            result = sign_payload(self._attestation_keypair, result)
+
+        return result
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """Discover available tools (built-in + registered toolkit tools).

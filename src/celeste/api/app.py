@@ -1292,15 +1292,35 @@ def create_app(
     )
     async def register_agent(body: RegisterAgentRequest):
         """Register a remote agent with the engine."""
+        from celeste.core.attestation import public_key_fingerprint
+
         agent_id = str(uuid.uuid4())
-        agent = EnvironmentAgent.remote(url=body.url, auth_token=body.auth_token)
+        agent = EnvironmentAgent.remote(
+            url=body.url,
+            auth_token=body.auth_token,
+            expected_public_key_pem=body.public_key_pem,
+            attestation_required=body.public_key_pem is not None,
+        )
+        # TODO-4: store the public key for signature verification.
+        fingerprint = None
+        if body.public_key_pem:
+            try:
+                fingerprint = public_key_fingerprint(body.public_key_pem)
+            except Exception:
+                fingerprint = None
         app.state.agent_registry[agent_id] = {
             "agent": agent,
             "url": body.url,
             "metadata": body.metadata or {},
             "registered_at": datetime.datetime.now(datetime.timezone.utc),
+            "public_key_pem": body.public_key_pem,
+            "public_key_fingerprint": fingerprint,
         }
-        return RegisterAgentResponse(agent_id=agent_id, status="pending")
+        return RegisterAgentResponse(
+            agent_id=agent_id,
+            status="pending",
+            public_key_fingerprint=fingerprint,
+        )
 
     @app.get(
         "/agents/{agent_id}/status",
@@ -1339,6 +1359,7 @@ def create_app(
                     status=status,
                     metadata=record["metadata"],
                     registered_at=_utc_iso(record["registered_at"]),
+                    public_key_fingerprint=record.get("public_key_fingerprint"),
                 )
             )
         return items

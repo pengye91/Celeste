@@ -181,6 +181,10 @@ class RegisterAgentRequest(BaseModel):
     url: str
     auth_token: str | None = None
     metadata: dict = Field(default_factory=dict)
+    # TODO-4: the agent's PEM-encoded public key for attestation. When set,
+    # the engine pins this key and verifies all subsequent tool-call
+    # signatures against it.
+    public_key_pem: str | None = None
 
 
 class RegisterAgentResponse(BaseModel):
@@ -188,6 +192,8 @@ class RegisterAgentResponse(BaseModel):
 
     agent_id: str
     status: str
+    # TODO-4: echoed back so the caller can confirm the key was accepted.
+    public_key_fingerprint: str | None = None
 
 
 class AgentStatusResponse(BaseModel):
@@ -206,6 +212,8 @@ class AgentListItem(BaseModel):
     status: str
     metadata: dict
     registered_at: str
+    # TODO-4: short fingerprint of the agent's public key (or None).
+    public_key_fingerprint: str | None = None
 
 
 class DeleteAgentResponse(BaseModel):
