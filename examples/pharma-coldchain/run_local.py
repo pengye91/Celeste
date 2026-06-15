@@ -223,11 +223,15 @@ async def run_pharma_local(
 
     try:
         logger.info("Starting OPA loop for pharma cold-chain scenario...")
+        # Pass max_llm_cost_usd from settings so the cost budget is enforced
+        # (MAX_LLM_COST_USD, default $5.00). Override via env or set to 0 to
+        # disable. The engine also honors MAX_OPA_CYCLES and MAX_LLM_TOKENS.
         workflow_result = await engine.run(
             goal=goal,
             agent=agent,
             planner=planner,
             evaluator=evaluator,
+            max_llm_cost_usd=settings.MAX_LLM_COST_USD,
         )
         logger.info("Workflow completed with status: %s", workflow_result.status)
 
@@ -321,6 +325,16 @@ async def run_pharma_local(
         "token_usage": workflow_result.llm_tokens_accumulated
         if workflow_result
         else 0,
+        # TODO-18: estimated cost from real token usage (provider rates vary;
+        # this uses MAX_LLM_COST_USD_PER_1K_TOKENS for a rough estimate).
+        "estimated_cost_usd": round(
+            (workflow_result.llm_tokens_accumulated if workflow_result else 0)
+            * settings.MAX_LLM_COST_USD_PER_1K_TOKENS
+            / 1000,
+            4,
+        )
+        if settings.MAX_LLM_COST_USD > 0
+        else None,
         "evaluation_report": (
             evaluation_report.model_dump()
             if hasattr(evaluation_report, "model_dump")

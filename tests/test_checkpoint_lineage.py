@@ -181,3 +181,108 @@ async def test_workflow_relationship_resolves_parent_and_children(settings):
         await session.refresh(parent, attribute_names=["children"])
         child_ids = {c.id for c in parent.children}
         assert child_id in child_ids
+
+
+# ---------------------------------------------------------------------------
+# API exposure: parent_workflow_id in list + detail responses
+# ---------------------------------------------------------------------------
+
+
+async def test_list_workflows_exposes_parent_workflow_id(settings):
+    """GET /api/workflows items include parent_workflow_id."""
+    import httpx
+    from celeste.api.app import create_app
+    from celeste.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+
+    class _NoopWorkspace(BaseWorkspace):
+        @property
+        def is_active(self):
+            return False
+
+        async def setup(self):
+            pass
+
+        async def execute(self, command, arguments=None, env=None):
+            return
+            yield  # type: ignore[misc]
+
+        async def teardown(self):
+            pass
+
+        async def get_workspace_path(self):
+            return "/tmp"
+
+    await init_db(settings=settings)
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+    async with get_session() as session:
+        session.add(Workflow(id=parent_id, name="parent", status="cancelled", dag_definition={}))
+        session.add(Workflow(
+            id=child_id, name="child", status="completed", dag_definition={},
+            parent_workflow_id=parent_id,
+        ))
+        session.add(Workflow(id=uuid.uuid4(), name="top", status="pending", dag_definition={}))
+
+    app = create_app(settings=settings, workspace_factory=lambda: _NoopWorkspace())
+    lifespan_cm = app.router.lifespan_context(app)
+    await lifespan_cm.__aenter__()
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/workflows")
+            assert resp.status_code == 200
+            items = resp.json()["items"]
+            by_name = {item["name"]: item for item in items}
+            # The child must carry the lineage pointer.
+            assert by_name["child"]["parent_workflow_id"] == str(parent_id)
+            # The top-level workflow must have None.
+            assert by_name["top"]["parent_workflow_id"] is None
+    finally:
+        await lifespan_cm.__aexit__(None, None, None)
+
+
+async def test_get_workflow_detail_exposes_parent_workflow_id(settings):
+    """GET /api/workflows/{id} includes parent_workflow_id."""
+    import httpx
+    from celeste.api.app import create_app
+    from celeste.core.workspaces.base import BaseWorkspace
+
+    class _NoopWorkspace(BaseWorkspace):
+        @property
+        def is_active(self):
+            return False
+
+        async def setup(self):
+            pass
+
+        async def execute(self, command, arguments=None, env=None):
+            return
+            yield  # type: ignore[misc]
+
+        async def teardown(self):
+            pass
+
+        async def get_workspace_path(self):
+            return "/tmp"
+
+    await init_db(settings=settings)
+    parent_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+    async with get_session() as session:
+        session.add(Workflow(id=parent_id, name="parent", status="cancelled", dag_definition={}))
+        session.add(Workflow(
+            id=child_id, name="child", status="running", dag_definition={},
+            parent_workflow_id=parent_id,
+        ))
+
+    app = create_app(settings=settings, workspace_factory=lambda: _NoopWorkspace())
+    lifespan_cm = app.router.lifespan_context(app)
+    await lifespan_cm.__aenter__()
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/workflows/{child_id}")
+            assert resp.status_code == 200
+            assert resp.json()["parent_workflow_id"] == str(parent_id)
+    finally:
+        await lifespan_cm.__aexit__(None, None, None)

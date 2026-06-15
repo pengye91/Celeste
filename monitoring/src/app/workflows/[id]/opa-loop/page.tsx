@@ -799,13 +799,19 @@ function OPALoopPageInner({
                         </div>
                       )}
 
-                      {/* Token count */}
+                      {/* Token count + estimated cost */}
                       {selectedCycle.tokenCount !== null && (
                         <div className="flex items-center gap-2">
                           <Badge variant="info" className="text-xs">
                             <Sparkles className="w-3 h-3 mr-1" />
                             {selectedCycle.tokenCount.toLocaleString()} tokens
                           </Badge>
+                          {metrics?.llm_tokens_accumulated != null && (
+                            <span className="text-xs text-comet-500">
+                              ≈ ${(metrics.llm_tokens_accumulated * 0.03 / 1000).toFixed(4)} est.
+                              ({metrics.llm_tokens_accumulated.toLocaleString()} total)
+                            </span>
+                          )}
                         </div>
                       )}
                     </Panel>

@@ -286,3 +286,200 @@ def test_terminal_statuses_cover_expected_set():
         WorkflowStatus.CANCELLED,
         WorkflowStatus.ESCALATED,
     }
+
+
+# ---------------------------------------------------------------------------
+# Engine retention sweep loop integration
+# ---------------------------------------------------------------------------
+
+
+async def test_engine_starts_retention_loop_when_enabled():
+    """Engine.start() launches the background sweep when retention > 0."""
+    from celeste.core.engine import Engine
+
+    settings = EngineSettings(
+        DATABASE_URL=SQLITE_MEMORY_URL,
+        WORKFLOW_RETENTION_DAYS=7,
+    )
+    engine = Engine(settings=settings)
+    await engine.start()
+    try:
+        assert engine._retention_task is not None
+        assert not engine._retention_task.done()
+    finally:
+        await engine.stop()
+
+
+async def test_engine_does_not_start_retention_loop_when_disabled():
+    """Engine.start() does NOT launch the sweep when retention = 0."""
+    from celeste.core.engine import Engine
+
+    settings = EngineSettings(
+        DATABASE_URL=SQLITE_MEMORY_URL,
+        WORKFLOW_RETENTION_DAYS=0,
+    )
+    engine = Engine(settings=settings)
+    await engine.start()
+    try:
+        assert engine._retention_task is None
+    finally:
+        await engine.stop()
+
+
+async def test_engine_stop_cancels_retention_loop():
+    """Engine.stop() cancels and awaits the retention sweep task."""
+    from celeste.core.engine import Engine
+
+    settings = EngineSettings(
+        DATABASE_URL=SQLITE_MEMORY_URL,
+        WORKFLOW_RETENTION_DAYS=7,
+    )
+    engine = Engine(settings=settings)
+    await engine.start()
+    task = engine._retention_task
+    assert task is not None
+
+    await engine.stop()
+    assert engine._retention_task is None
+    assert task.cancelled() or task.done()
+
+
+async def test_retention_loop_swallows_exceptions():
+    """A sweep failure must not crash the engine."""
+    from celeste.core.engine import Engine
+    from celeste.database import retention as retention_mod
+
+    call_count = 0
+
+    original = retention_mod.cleanup_old_workflows
+
+    async def _failing_cleanup(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("simulated DB error")
+
+    retention_mod.cleanup_old_workflows = _failing_cleanup
+    try:
+        settings = EngineSettings(
+            DATABASE_URL=SQLITE_MEMORY_URL,
+            WORKFLOW_RETENTION_DAYS=7,
+        )
+        engine = Engine(settings=settings)
+        # Temporarily shorten the sleep interval so the loop ticks fast.
+        engine._RETENTION_SWEEP_INTERVAL_SECONDS = 0
+        await engine.start()
+        # Give the loop time to run a failing sweep.
+        import asyncio
+
+        await asyncio.sleep(0.3)
+        assert call_count > 0
+        # Engine must still be running (loop swallowed the error).
+        assert engine._running
+        await engine.stop()
+    finally:
+        retention_mod.cleanup_old_workflows = original
+
+
+# ---------------------------------------------------------------------------
+# POST /api/admin/retention/cleanup endpoint
+# ---------------------------------------------------------------------------
+
+
+async def test_retention_cleanup_endpoint_deletes_old_workflows():
+    """POST /api/admin/retention/cleanup triggers a sweep and reports counts."""
+    import httpx
+    from celeste.api.app import create_app
+    from celeste.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+    import asyncio
+
+    class _NoopWorkspace(BaseWorkspace):
+        @property
+        def is_active(self):
+            return False
+
+        async def setup(self):
+            pass
+
+        async def execute(self, command, arguments=None, env=None):
+            return
+            yield  # type: ignore[misc]
+
+        async def teardown(self):
+            pass
+
+        async def get_workspace_path(self):
+            return "/tmp"
+
+    settings = EngineSettings(
+        DATABASE_URL=SQLITE_MEMORY_URL,
+        WORKFLOW_RETENTION_DAYS=7,
+        MAX_PARALLEL_SUBPROCESSES=2,
+    )
+    await init_db(settings=settings)
+
+    # Seed an old terminal workflow + a recent one.
+    now = datetime.now(timezone.utc)
+    ancient = now - timedelta(days=365)
+    await _make_workflow(name="old-done", status=WorkflowStatus.COMPLETED, created_at=ancient)
+    await _make_workflow(name="recent", status=WorkflowStatus.RUNNING, created_at=now)
+
+    app = create_app(settings=settings, workspace_factory=lambda: _NoopWorkspace())
+    lifespan_cm = app.router.lifespan_context(app)
+    await lifespan_cm.__aenter__()
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/admin/retention/cleanup")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["deleted"] == 1
+            assert data["retention_days"] == 7
+            assert isinstance(data["candidates"], int)
+    finally:
+        await lifespan_cm.__aexit__(None, None, None)
+
+
+async def test_retention_cleanup_endpoint_noop_when_disabled():
+    """When retention is disabled (0), the endpoint reports deleted=0."""
+    import httpx
+    from celeste.api.app import create_app
+    from celeste.core.workspaces.base import BaseWorkspace, WorkspaceEvent
+
+    class _NoopWorkspace(BaseWorkspace):
+        @property
+        def is_active(self):
+            return False
+
+        async def setup(self):
+            pass
+
+        async def execute(self, command, arguments=None, env=None):
+            return
+            yield  # type: ignore[misc]
+
+        async def teardown(self):
+            pass
+
+        async def get_workspace_path(self):
+            return "/tmp"
+
+    settings = EngineSettings(
+        DATABASE_URL=SQLITE_MEMORY_URL,
+        WORKFLOW_RETENTION_DAYS=0,
+        MAX_PARALLEL_SUBPROCESSES=2,
+    )
+    await init_db(settings=settings)
+
+    app = create_app(settings=settings, workspace_factory=lambda: _NoopWorkspace())
+    lifespan_cm = app.router.lifespan_context(app)
+    await lifespan_cm.__aenter__()
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/admin/retention/cleanup")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["deleted"] == 0
+            assert data["retention_days"] == 0
+    finally:
+        await lifespan_cm.__aexit__(None, None, None)

@@ -189,6 +189,7 @@ async def run_pharma_remote(
             agent=agent,
             planner=planner,
             evaluator=evaluator,
+            max_llm_cost_usd=settings.MAX_LLM_COST_USD,
         )
         logger.info("Workflow completed with status: %s", workflow_result.status)
 

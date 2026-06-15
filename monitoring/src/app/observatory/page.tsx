@@ -1,16 +1,20 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Shell } from "@/components/shell/shell";
 import { Panel } from "@/components/ui/panel";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Telescope from "lucide-react/dist/esm/icons/telescope";
 import X from "lucide-react/dist/esm/icons/x";
 import Filter from "lucide-react/dist/esm/icons/filter";
+import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 import { useLiveGlobalEvents } from "@/hooks/useLiveGlobalEvents";
 import { useWorkflows } from "@/hooks/useWorkflow";
 import { useUrlState } from "@/hooks/useUrlState";
 import { summarizeFleetFromWorkflows } from "@/lib/featureVerification";
+import { runRetentionCleanup } from "@/lib/api";
 import type { FeatureCheck, WorkflowListItem, WorkflowWorkflowEvent } from "@/lib/types";
 import { EventTicker } from "@/components/observatory/event-ticker";
 import { FeatureVerificationSummary } from "@/components/observatory/feature-verification-summary";
@@ -282,6 +286,53 @@ function ObservatoryContent() {
           <ProviderMix events={events} />
         </div>
       </div>
+
+      {/* Admin: retention cleanup */}
+      <RetentionAdminPanel />
     </div>
+  );
+}
+
+function RetentionAdminPanel() {
+  const mutation = useMutation({
+    mutationFn: runRetentionCleanup,
+  });
+  const result = mutation.data;
+  const error = mutation.error as Error | null;
+
+  return (
+    <Panel variant="subtle" padding="md">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Trash2 className="w-4 h-4 text-comet-400" aria-hidden="true" />
+          <div>
+            <h3 className="text-sm font-medium text-comet-200">Retention cleanup</h3>
+            <p className="text-xs text-comet-500">
+              Delete terminal workflows past their retention age.
+              {result && (
+                <span className="ml-2 text-comet-400">
+                  Deleted {result.deleted} workflow(s)
+                  {result.candidates > 0 && ` · ${result.candidates} candidate(s) remain`}
+                  {result.retention_days > 0 && ` · ${result.retention_days} day policy`}
+                  {result.retention_days === 0 && " · retention disabled"}
+                </span>
+              )}
+              {error && (
+                <span className="ml-2 text-red-400">{error.message}</span>
+              )}
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="default"
+          size="sm"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+          aria-label="Run retention cleanup sweep"
+        >
+          {mutation.isPending ? "Sweeping…" : "Run sweep"}
+        </Button>
+      </div>
+    </Panel>
   );
 }

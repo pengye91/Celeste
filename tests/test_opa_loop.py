@@ -1315,6 +1315,118 @@ async def test_opa_loop_resume_rejects_running_without_opa_state():
         await close_db()
 
 
+@pytest.mark.asyncio
+async def test_opa_loop_resume_accepts_running_with_opa_state():
+    """TODO-2: a RUNNING workflow WITH _opa_state is resumable.
+
+    Engine.resume_workflow atomically flips PAUSED→RUNNING before
+    delegating to OPALoop.resume, so by the time resume() runs the
+    workflow is RUNNING. The status guard at opa_loop.py:839 accepts
+    RUNNING+opa_state_present. This test verifies the positive branch.
+    """
+    from celeste.core.opa_loop import OPALoop, WorkflowResult
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=5000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        async with get_session() as session:
+            wf = Workflow(
+                name="running-with-state",
+                status=WorkflowStatus.RUNNING,
+                dag_definition={
+                    "goal": "running-with-state",
+                    "_opa_state": {
+                        "cycle_count": 1,
+                        "llm_tokens_accumulated": 200,
+                        "history": [],
+                    },
+                },
+            )
+            session.add(wf)
+            await session.flush()
+            workflow_id = wf.id
+
+        agent = _StubAgent(snapshot_result={"files": {}})
+        planner = _StubPlanner(fragments=[_make_fragment(goal_achieved=True)])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.resume(workflow_id, "human input")
+
+        # Must NOT raise — RUNNING+opa_state is accepted.
+        assert isinstance(result, WorkflowResult)
+        assert result.status == "completed"
+    finally:
+        await close_db()
+
+
+@pytest.mark.asyncio
+async def test_opa_loop_resume_accumulates_tokens():
+    """TODO-18: token tracking works on the resume path.
+
+    A paused workflow with 200 accumulated tokens is resumed. The stub
+    planner stashes 150 tokens/cycle. After resume completes (1 cycle),
+    the total must be 200 (carried) + 150 (new) = 350.
+    """
+    from celeste.core.opa_loop import OPALoop
+    from celeste.database.db import close_db, get_session, init_db
+    from celeste.database.models import Workflow, WorkflowStatus
+
+    settings = EngineSettings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        MAX_OPA_CYCLES=10,
+        MAX_LLM_TOKENS=50000,
+    )
+    await init_db(settings=settings)
+
+    try:
+        async with get_session() as session:
+            wf = Workflow(
+                name="resume-token-test",
+                status=WorkflowStatus.RUNNING,
+                dag_definition={
+                    "goal": "resume-token-test",
+                    "_opa_state": {
+                        "cycle_count": 2,
+                        "llm_tokens_accumulated": 200,
+                        "history": [],
+                    },
+                },
+            )
+            session.add(wf)
+            await session.flush()
+            workflow_id = wf.id
+
+        agent = _StubAgent(snapshot_result={"files": {}})
+        fragment = _make_fragment(nodes=[_make_tool_node("step1")], goal_achieved=True)
+        setattr(fragment, "_usage", {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150})
+        planner = _StubPlanner(fragments=[fragment])
+        evaluator = _StubEvaluator(decisions=[EvaluatorDecision.DONE])
+
+        loop = OPALoop(agent=agent, planner=planner, evaluator=evaluator, settings=settings)
+        result = await loop.resume(workflow_id, "continue")
+
+        assert result.llm_tokens_accumulated == 350, (
+            f"Expected 200 (carried) + 150 (new) = 350, got {result.llm_tokens_accumulated}"
+        )
+
+        # The workflow row must also persist the updated total.
+        async with get_session() as session:
+            db_wf = (await session.execute(
+                __import__("sqlalchemy").select(Workflow).where(Workflow.id == workflow_id)
+            )).scalar_one()
+            assert db_wf.llm_tokens_accumulated == 350
+    finally:
+        await close_db()
+
+
 # ---------------------------------------------------------------------------
 # Test: F022 -- _mark_node_status and _update_workflow_status use a single
 # session in the OPA loop's status transitions.

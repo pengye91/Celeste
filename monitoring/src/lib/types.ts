@@ -12,6 +12,7 @@ export interface WorkflowListItem {
   name: string;
   status: WorkflowStatus;
   created_at: string;
+  parent_workflow_id?: string | null;
 }
 
 export interface WorkflowListResponse {
@@ -29,6 +30,7 @@ export interface WorkflowDetail {
   dag_definition: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  parent_workflow_id?: string | null;
   pause_reason?: string;
   pause_duration?: number;
   pause_cycles?: number;
@@ -115,6 +117,24 @@ export interface RegisterAgentRequest {
 export interface RegisterAgentResponse {
   agent_id: string;
   status: string;
+}
+
+export interface RunRequest {
+  goal: string;
+  max_cycles?: number;
+  max_llm_tokens?: number;
+  max_llm_cost_usd?: number;
+}
+
+export interface RunResponse {
+  run_id: string;
+  status: string;
+}
+
+export interface RetentionCleanupResponse {
+  deleted: number;
+  candidates: number;
+  retention_days: number;
 }
 
 // Legacy / compatibility types (kept for existing components during migration)

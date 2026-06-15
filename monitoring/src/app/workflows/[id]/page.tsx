@@ -626,6 +626,16 @@ function WorkflowDetailPageInner({
                       {workflow.id}
                     </span>
                     <CopyButton text={workflow.id} />
+                    {"parent_workflow_id" in workflow && workflow.parent_workflow_id && (
+                      <Link
+                        href={`/workflows/${workflow.parent_workflow_id}`}
+                        className="flex items-center gap-1 text-xs text-aurora-400 hover:text-aurora-300 transition-colors"
+                        aria-label={`Continued from workflow ${workflow.parent_workflow_id}`}
+                      >
+                        <GitBranch className="w-3.5 h-3.5" aria-hidden="true" />
+                        continued from
+                      </Link>
+                    )}
                   </div>
                 </div>
               </div>

@@ -89,6 +89,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: "postgresql+asyncpg://celeste:celeste@postgres-hub:5432/pharma_coldchain"
+      # TODO-19: retention policy. Set to 0 to disable (keep forever).
+      WORKFLOW_RETENTION_DAYS: "30"
     command:
       - python
       - examples/pharma-coldchain/serve_agent.py

@@ -153,8 +153,16 @@ The pharma scenario is LLM-driven: the planner generates DAG nodes
 dynamically each OPA cycle, so node and cycle counts vary per run and
 depend on the LLM provider. Cost scales roughly linearly with the
 number of OPA cycles until `goal_achieved` (capped by `MAX_OPA_CYCLES`,
-default 100). For budget control, set `MAX_OPA_CYCLES` and `MAX_LLM_TOKENS`
-in `.env`. Approximate order-of-magnitude cost for a typical run:
+default 100). For budget control, set these in `.env`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `MAX_OPA_CYCLES` | 100 | Hard cap on OPA-loop iterations. When hit, escalates. |
+| `MAX_LLM_TOKENS` | 50000 | Token budget per workflow. When hit, escalates. |
+| `MAX_LLM_COST_USD` | 5.00 | USD cost ceiling per workflow (estimated from tokens). When hit, escalates. Set to 0 to disable. |
+| `WORKFLOW_RETENTION_DAYS` | 0 (disabled) | Terminal workflows older than this are deleted by the background sweep. Set to 30+ in production. |
+
+Approximate order-of-magnitude cost for a typical run:
 
 | Provider | Est. Tokens | Est. Cost |
 |----------|-------------|-----------|

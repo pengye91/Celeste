@@ -157,14 +157,17 @@ async def _fetch_evaluation(client: httpx.AsyncClient, workflow_id: str | None) 
 def _to_result_dict(
     status_payload: dict[str, Any],
     evaluation_report: Any,
+    metrics_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the structured result dict (same shape as run_local/remote)."""
+    metrics_payload = metrics_payload or {}
     return {
         "mode": "embedded",
         "workflow_id": status_payload.get("workflow_id"),
         "status": status_payload.get("status", "unknown"),
-        "cycles": 0,  # not surfaced by /api/runs; fetch via /metrics if needed
-        "token_usage": 0,
+        "cycles": metrics_payload.get("cycle_count", 0),
+        # TODO-18: real token usage from the metrics endpoint.
+        "token_usage": metrics_payload.get("llm_tokens_accumulated") or 0,
         "evaluation_report": (
             evaluation_report.model_dump()
             if hasattr(evaluation_report, "model_dump")
@@ -243,7 +246,11 @@ async def run_pharma_embedded(
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://embedded") as client:
             logger.info("POST /api/runs (goal=%d chars)", len(the_goal))
-            resp = await client.post("/api/runs", json={"goal": the_goal})
+            # Pass max_llm_cost_usd so the cost budget is enforced (TODO-6).
+            run_body: dict[str, Any] = {"goal": the_goal}
+            if settings.MAX_LLM_COST_USD > 0:
+                run_body["max_llm_cost_usd"] = settings.MAX_LLM_COST_USD
+            resp = await client.post("/api/runs", json=run_body)
             resp.raise_for_status()
             run_id = resp.json()["run_id"]
             logger.info("Started embedded run %s", run_id)
@@ -259,6 +266,17 @@ async def run_pharma_embedded(
             evaluation_report = await _fetch_evaluation(
                 client, status_payload.get("workflow_id")
             )
+
+            # TODO-18: fetch real token usage from the metrics endpoint.
+            metrics_payload: dict[str, Any] = {}
+            wf_id = status_payload.get("workflow_id")
+            if wf_id:
+                try:
+                    metrics_resp = await client.get(f"/api/workflows/{wf_id}/metrics")
+                    if metrics_resp.status_code == 200:
+                        metrics_payload = metrics_resp.json()
+                except Exception:
+                    pass
     finally:
         # Cancel any lingering background run tasks before teardown.
         if hasattr(app.state, "running_run_tasks"):
@@ -273,7 +291,7 @@ async def run_pharma_embedded(
             app.state.running_run_tasks.clear()
         await lifespan_cm.__aexit__(None, None, None)
 
-    return _to_result_dict(status_payload, evaluation_report)
+    return _to_result_dict(status_payload, evaluation_report, metrics_payload)
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +350,8 @@ async def _serve_and_run(
     evaluation_report = None
     try:
         async with httpx.AsyncClient(base_url=f"http://{host}:{port}") as client:
-            resp = await client.post("/api/runs", json={"goal": goal})
+            run_body_serve: dict[str, Any] = {"goal": goal}
+            resp = await client.post("/api/runs", json=run_body_serve)
             resp.raise_for_status()
             run_id = resp.json()["run_id"]
             status_payload = await _poll_run(client, run_id, timeout=timeout)

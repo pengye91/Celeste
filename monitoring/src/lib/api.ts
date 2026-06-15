@@ -10,6 +10,7 @@ import type {
   RegisterAgentRequest,
   RegisterAgentResponse,
   WorkflowNodeStatus,
+  RetentionCleanupResponse,
 } from "@/lib/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_CELESTE_API_URL || "http://localhost:8000";
@@ -168,6 +169,16 @@ export async function registerAgent(body: RegisterAgentRequest): Promise<Registe
   return fetchJson<RegisterAgentResponse>("/agents/register", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+// ------------------------------------------------------------------
+// Admin
+// ------------------------------------------------------------------
+
+export async function runRetentionCleanup(): Promise<RetentionCleanupResponse> {
+  return fetchJson<RetentionCleanupResponse>("/admin/retention/cleanup", {
+    method: "POST",
   });
 }
 
