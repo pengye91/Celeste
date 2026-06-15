@@ -17,6 +17,20 @@ vi.mock("@/components/shell/shell", () => ({
   ),
 }));
 
+// Mock useMutation so the RetentionAdminPanel doesn't need a QueryClient.
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual("@tanstack/react-query");
+  return {
+    ...actual,
+    useMutation: () => ({
+      mutate: vi.fn(),
+      data: undefined,
+      error: null,
+      isPending: false,
+    }),
+  };
+});
+
 vi.mock("next/link", () => ({
   default: ({
     href,
@@ -72,6 +86,7 @@ vi.mock("@/lib/api", () => ({
   resumeWorkflow: vi.fn().mockResolvedValue({ workflow_id: "", status: "" }),
   registerAgent: vi.fn().mockResolvedValue({ agent_id: "", status: "" }),
   listAgents: vi.fn().mockResolvedValue([]),
+  runRetentionCleanup: vi.fn().mockResolvedValue({ deleted: 0, candidates: 0, retention_days: 0 }),
 }));
 
 // ------------------------------------------------------------------
